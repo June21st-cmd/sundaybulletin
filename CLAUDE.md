@@ -6,6 +6,7 @@ This file is a thin entry point for Claude Code. The SSOT is `README.md` and doc
 2. `docs/setup-guide.md`
 3. `docs/architecture.md`
 4. `.agents/rules/rules-project.md`
+5. `.agents/rules/rules-security.md`
 
 ## Skills & Workflows
 - All project skills are in `.agents/skills/`. Read the relevant `SKILL.md` before performing domain-specific work.

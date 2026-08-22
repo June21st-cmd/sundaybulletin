@@ -4,4 +4,6 @@ globs: *
 ---
 # Sunday Bulletin Project Rules
 
-Please follow the SSOT project rules defined in `.agents/rules/rules-project.md` and architectural patterns in `README.md` and `docs/`.
+Read the project sources in this order: `README.md`, `docs/setup-guide.md`, `docs/architecture.md`, `.agents/rules/rules-project.md`, and `.agents/rules/rules-security.md`.
+
+Treat `.agents/rules/`, `.agents/skills/`, and `.agents/workflows/` as the shared sources for all AI tools. Do not duplicate their contents in Cursor-specific files.

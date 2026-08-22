@@ -6,8 +6,9 @@ trigger: always_on
 
 ## 1. 프로젝트 개요 및 SSOT 원칙
 - 본 프로젝트는 교회 주보 제작 자동화 시스템입니다.
-- **SSOT (Single Source of Truth)**: 전체 아키텍처 및 기획은 `README.md` 및 `docs/`에 관리하며, 진입점 파일(`AGENTS.md`, `CLAUDE.md`, `.cursorrules`)은 얇은 래퍼(Thin Wrapper)로 유지합니다.
-- 스킬 원본은 `.agents/skills/`, 워크플로우 원본은 `.agents/workflows/`에만 둡니다.
+- **영역별 SSOT (Single Source of Truth)**: 프로젝트 목적 및 전체 워크플로우는 `README.md`, 환경 및 실행 방법은 `docs/setup-guide.md`, 아키텍처는 `docs/architecture.md`에만 관리합니다.
+- 모든 AI의 공통 행동 및 보안 규칙은 `.agents/rules/`, 스킬 원본은 `.agents/skills/`, 워크플로우 원본은 `.agents/workflows/`에만 둡니다.
+- 진입점 파일(`AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `.cursor/rules/`)은 위 원본을 참조하는 얇은 래퍼(Thin Wrapper)로 유지하며, 규칙이나 워크플로우 내용을 복제하지 않습니다.
 
 ## 2. 크로스 플랫폼 호환성 (Windows & Linux/macOS)
 - **실행 환경**: 사용자의 실 운영 환경(Windows PC + 한컴오피스/프린터)과 개발/배포 환경(Linux/WSL/macOS) 모두에서 동작해야 합니다.
