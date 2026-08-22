@@ -1,0 +1,23 @@
+# Auto-detect text files and normalize line endings to LF
+* text=auto
+
+# Explicitly declare text files you always want to be LF
+*.py text eol=lf
+*.md text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
+*.typ text eol=lf
+*.sh text eol=lf
+
+# Windows batch files should keep CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files that should not be converted
+*.hwpx binary
+*.hwp binary
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary

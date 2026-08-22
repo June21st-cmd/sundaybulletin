@@ -1,0 +1,36 @@
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Output files
+output/*
+!output/.gitkeep
+tmp/*
+!tmp/.gitkeep
+
+# Operating System & IDE
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# Environment & Credentials
+.env
+.env.local
+*.pem
+*.key
+
+# Typst output caches if any
+*.pdf.tmp
