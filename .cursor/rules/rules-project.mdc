@@ -1,0 +1,7 @@
+---
+description: Sunday Bulletin project conventions and rules
+globs: *
+---
+# Sunday Bulletin Project Rules
+
+Please follow the SSOT project rules defined in `.agents/rules/rules-project.md` and architectural patterns in `README.md` and `docs/`.

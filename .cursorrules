@@ -1,0 +1,4 @@
+# Cursor Rules — Thin Entry Point
+See `README.md` and `.agents/rules/rules-project.md` for project conventions and rules.
+Skills are in `.agents/skills/`.
+Workflows are in `.agents/workflows/`.
