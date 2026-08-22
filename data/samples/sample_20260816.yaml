@@ -1,0 +1,36 @@
+# 주간 주보 입력 데이터 샘플
+date: "2026-08-16"
+service_name: "주일 예배"
+season: "성령강림후 제12주"
+
+worship_order:
+  - item: "예배부름"
+    content: "인도자"
+    attendee: "다함께"
+  - item: "찬송"
+    content: "새찬송가 28장"
+    attendee: "다함께"
+    emphasis: true
+  - item: "성경봉독"
+    content: "누가복음 10:25-37"
+    attendee: "인도자"
+  - item: "말씀선포"
+    content: "선한 이웃은 누구인가"
+    attendee: "담임목사"
+    emphasis: true
+  - item: "봉헌"
+    content: "찬송가 50장 1절"
+    attendee: "다함께"
+  - item: "축도"
+    content: ""
+    attendee: "담임목사"
+
+sermon:
+  title: "선한 이웃은 누구인가"
+  preacher: "담임목사"
+  scripture: "누가복음 10:25-37"
+
+announcements:
+  - "1. 오늘 예배에 참석하신 모든 교우들을 주님의 이름으로 환영합니다."
+  - "2. 다음 주일(8월 23일)은 환경선교주일로 지킵니다."
+  - "3. 구역장 모임: 오늘 오후 1시 소예배실"
