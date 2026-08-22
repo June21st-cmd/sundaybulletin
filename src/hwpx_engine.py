@@ -38,8 +38,8 @@ class HwpxEngine:
             motto = str(meta.get("motto", ""))
             flat_map["motto"] = motto
             flat_map["표어"] = motto
-            motto_parts = motto.split("\n") if "\n" in motto else [motto, ""]
-            flat_map["motto_line1"] = str(meta.get("motto_line1", motto_parts[0]))
+            motto_parts = [p.strip() for p in motto.splitlines() if p.strip()] if "\n" in motto else [motto, ""]
+            flat_map["motto_line1"] = str(meta.get("motto_line1", motto_parts[0] if motto_parts else ""))
             flat_map["motto_line2"] = str(meta.get("motto_line2", motto_parts[1] if len(motto_parts) > 1 else ""))
 
             flat_map["headline_left"] = str(meta.get("headline_left", ""))
@@ -57,9 +57,22 @@ class HwpxEngine:
             flat_map["worship_opening_hymn"] = str(worship.get("opening_hymn", ""))
             flat_map["여는찬송"] = flat_map["worship_opening_hymn"]
 
+            flat_map["choir_song_title"] = str(worship.get("choir_song_title", ""))
+            flat_map["찬양곡명"] = flat_map["choir_song_title"]
+            flat_map["choir_song_info"] = str(worship.get("choir_song_info", ""))
+            flat_map["찬양정보"] = flat_map["choir_song_info"]
+            flat_map["choir_song_lyrics_1"] = str(worship.get("choir_song_lyrics_1", ""))
+            flat_map["choir_song_lyrics_2"] = str(worship.get("choir_song_lyrics_2", ""))
+
             flat_map["worship_scripture"] = str(worship.get("scripture", ""))
             flat_map["성서읽기"] = flat_map["worship_scripture"]
             flat_map["성경본문"] = flat_map["worship_scripture"]
+
+            flat_map["responsive_scripture_ref"] = str(worship.get("responsive_scripture_ref", ""))
+            flat_map["함께읽는말씀_성경"] = flat_map["responsive_scripture_ref"]
+            flat_map["responsive_scripture_1"] = str(worship.get("responsive_scripture_1", ""))
+            flat_map["responsive_scripture_2"] = str(worship.get("responsive_scripture_2", ""))
+            flat_map["responsive_scripture_3"] = str(worship.get("responsive_scripture_3", ""))
 
             flat_map["worship_gospel"] = str(worship.get("gospel", ""))
             flat_map["복음서읽기"] = flat_map["worship_gospel"]
@@ -81,7 +94,35 @@ class HwpxEngine:
             flat_map["worship_benediction"] = str(worship.get("benediction", ""))
             flat_map["축복기도"] = flat_map["worship_benediction"]
 
-        # 3. Announcements slot mapping (up to 15 slots)
+        # 3. Duties (예배위원 3주 테이블)
+        duties = data.get("duties", {})
+        if isinstance(duties, dict):
+            for w in ["w1", "w2", "w3"]:
+                w_data = duties.get(w, {})
+                flat_map[f"duty_{w}_date"] = str(w_data.get("date", ""))
+                flat_map[f"duty_{w}_presider"] = str(w_data.get("presider", ""))
+                flat_map[f"duty_{w}_pastoral_prayer"] = str(w_data.get("pastoral_prayer", ""))
+                flat_map[f"duty_{w}_scripture_reader"] = str(w_data.get("scripture_reader", ""))
+                flat_map[f"duty_{w}_preacher"] = str(w_data.get("preacher", ""))
+                flat_map[f"duty_{w}_thanks_prayer"] = str(w_data.get("thanks_prayer", ""))
+
+        # 4. Donations (감사헌금)
+        donations = data.get("donations", {})
+        if isinstance(donations, dict):
+            flat_map["thanksgiving_donors"] = str(donations.get("thanksgiving", ""))
+            flat_map["감사헌금"] = flat_map["thanksgiving_donors"]
+
+        # 5. Prayer requests (기도나눔)
+        prayers = data.get("prayer_requests", {})
+        if isinstance(prayers, dict):
+            flat_map["healing_prayer_1"] = str(prayers.get("healing_1", ""))
+            flat_map["healing_prayer_2"] = str(prayers.get("healing_2", ""))
+            flat_map["healing_prayer_3"] = str(prayers.get("healing_3", ""))
+            flat_map["military_prayer_names"] = str(prayers.get("military", ""))
+            flat_map["overseas_prayer_1"] = str(prayers.get("overseas_1", ""))
+            flat_map["overseas_prayer_2"] = str(prayers.get("overseas_2", ""))
+
+        # 6. Announcements slot mapping (up to 15 slots)
         announcements = data.get("announcements", [])
         if isinstance(announcements, list):
             for i in range(15):
@@ -103,29 +144,7 @@ class HwpxEngine:
                 flat_map[f"ad{slot_idx}_content"] = content
                 flat_map[f"광고{slot_idx}_내용"] = content
 
-        # 4. Prayer requests slot mapping (up to 10 slots)
-        prayers = data.get("prayer_requests", [])
-        if isinstance(prayers, list):
-            for i in range(10):
-                slot_idx = i + 1
-                if i < len(prayers):
-                    item = prayers[i]
-                    if isinstance(item, dict):
-                        name = str(item.get("name", ""))
-                        content = str(item.get("content", ""))
-                    else:
-                        name = str(item)
-                        content = ""
-                else:
-                    name = ""
-                    content = ""
-
-                flat_map[f"prayer{slot_idx}_name"] = name
-                flat_map[f"기도나눔{slot_idx}_이름"] = name
-                flat_map[f"prayer{slot_idx}_content"] = content
-                flat_map[f"기도나눔{slot_idx}_내용"] = content
-
-        # 5. Direct top-level key-values
+        # 7. Direct top-level key-values
         for key, val in data.items():
             if isinstance(val, (str, int, float)):
                 flat_map[key] = str(val)
@@ -163,13 +182,11 @@ class HwpxEngine:
                     # Replace defined keys
                     for key, val in flat_map.items():
                         escaped_val = html.escape(val)
-                        # Replace {{key}}
                         xml_text = xml_text.replace(f"{{{{{key}}}}}", escaped_val)
-                        # Replace {{ key }} with spaces
                         xml_text = xml_text.replace(f"{{{{ {key} }}}}", escaped_val)
 
-                    # Auto-clean any remaining unreplaced ad/prayer slots
-                    xml_text = re.sub(r"\{\{(ad\d+_[a-z]+|광고\d+_[가-힣]+|prayer\d+_[a-z]+|기도나눔\d+_[가-힣]+)\}\}", "", xml_text)
+                    # Auto-clean any remaining unreplaced slots
+                    xml_text = re.sub(r"\{\{[^}]+\}\}", "", xml_text)
 
                     xml_file.write_text(xml_text, encoding="utf-8")
 
