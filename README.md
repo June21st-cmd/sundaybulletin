@@ -1,111 +1,111 @@
-# 🖨️ 윈도우 환경 주보 제작 자동화 종합 가이드 (Sunday Bulletin)
+# 🖨️ 향린교회 주보 제작 자동화 시스템 (Sunday Bulletin)
 
 > [!NOTE]
 > **핵심 전제 조건 (Prerequisites & Constraints)**
-> 1. **실행 환경**: 윈도우(Windows) PC 및 리눅스/macOS 개발 환경 지원
-> 2. **인쇄 환경**: 전문 인쇄소 조판 불필요, **교회 자체 컬러 프린터 A4 출력/인쇄**
-> 3. **비용 원칙**: **유료 소프트웨어 구독 제외** (완전 무료 / 오픈소스 / 기본 오피스 활용)
-> 4. **서식 품질**: 기존 한글(.hwp/.hwpx)의 **표 레이아웃, 글자 장평(가로 확대), 배분 정렬, A4 2단 접지 서식 100% 보존**
-> 5. **자동화 목표**: 매주 바뀌는 원고를 AI가 정리하여 **원클릭으로 1초 만에 인쇄본 생성**
+> 1. **비개발자 친화**: 교역자/사무원이 클릭 한 번으로 매주 주보 완성
+> 2. **실행 환경**: 교회 사무실 윈도우(Windows) PC 및 리눅스/macOS 완벽 지원
+> 3. **인쇄 환경**: 전문 인쇄소 조판 불필요, **교회 자체 컬러 프린터 A4 출력/인쇄**
+> 4. **비용 원칙**: **유료 소프트웨어 구독 제외** (완전 무료 / 오픈소스 / 기본 오피스 활용)
+> 5. **서식 품질**: 기존 한글(.hwp/.hwpx)의 **표 레이아웃, 글자 장평(가로 확대), 배분 정렬, A4 2단 접지 서식 100% 보존**
 
 ---
 
-## 📖 주보 제작 실전 사용법 (Quick Start & Usage Guide)
+## 👶 1. 비전공자를 위한 1분 최초 설치 안내 (Windows PC 기준)
 
-매주 주보를 제작할 때 아래의 **3단계 워크플로우**로 1초 만에 인쇄본을 완성합니다.
+컴퓨터에 처음 프로그램을 설치할 때 딱 한 번만 아래 과정을 진행하시면 됩니다.
+
+### 1단계: 파이썬(Python) 설치
+1. [공식 파이썬 다운로드 페이지 (python.org)](https://www.python.org/downloads/)에 접속하여 노란색 **`Download Python`** 버튼을 클릭합니다.
+2. 다운로드받은 설치 파일(`python-x.x.x-amd64.exe`)을 실행합니다.
+3. ⚠️ **가장 중요한 부분 (핵심)**:
+   - 설치 창 맨 아래에 있는 **`[✓] Add python.exe to PATH`** 체크박스를 **반드시 체크**합니다!
+   - 그 다음 **`Install Now`**를 클릭하여 설치를 마칩니다.
+
+```text
+[설치 창 화면 예시]
+┌────────────────────────────────────────────────────────┐
+│ Install Python 3.x.x (64-bit)                          │
+│                                                        │
+│   [✓] Use admin privileges when installing py.exe     │
+│   [✓] Add python.exe to PATH  ◀─── [★ 반드시 체크!!]    │
+│                                                        │
+│   ──> Install Now                                      │
+└────────────────────────────────────────────────────────┘
+```
+
+### 2단계: 필수 도구 원클릭 자동 설치
+- 프로젝트 폴더 내 **`scripts/setup_windows.bat`** 파일을 **더블클릭**합니다.
+- 필요한 패키지가 3초 만에 자동으로 설치되며 `🎉 모든 설정이 완료되었습니다!` 메시지가 뜨면 준비 끝입니다.
+
+*(리눅스/macOS 사용자는 터미널에서 `./scripts/setup_linux.sh` 실행)*
+
+---
+
+## 🤖 2. AI 비서(`agy`, Claude, ChatGPT)에게 요청하는 복붙 프롬프트
+
+프로그래밍이나 명령어를 전혀 몰라도, 사용하는 AI 도구(Antigravity `agy`, Claude Code, Cursor, ChatGPT, Gemini 등)에게 아래 프롬프트를 그대로 복사해서 붙여넣으면 AI가 모든 작업을 대신 처리해 줍니다.
+
+---
+
+### 💬 [프롬프트 1] 처음 셋업 및 동작 검증 요청할 때
+> ```text
+> 이 프로젝트의 Sunday Bulletin 환경을 처음부터 완전히 셋업하고, 단위 테스트를 실행해서 모든 기능이 정상 동작하는지 검증해줘.
+> ```
+
+---
+
+### 💬 [프롬프트 2] 매주 원고로 주보를 만들어달라고 할 때 (가장 많이 사용!)
+> ```text
+> 아래 이번 주 교회 주보 원고를 읽고 Sunday Bulletin 양식에 맞춰 data/inputs/ 폴더에 이번 주 YAML 데이터를 생성한 뒤, [주보] HWPX 파일을 완성해줘:
+> 
+> [여기에 목사님 설교 메모, 성경 본문, 찬송가, 교회 소식 등을 그대로 붙여넣기]
+> ```
+
+---
+
+### 💬 [프롬프트 3] 주보 양식이나 새로운 항목을 추가/수정하고 싶을 때
+> ```text
+> 주보에 '어린이부 소식'과 '헌금위원 명단' 항목을 새로 추가하려고 해. templates/hwpx/template.hwpx 템플릿과 src/hwpx_engine.py 파서에 안전하게 반영하고 테스트해줘.
+> ```
+
+---
+
+### 💬 [프롬프트 4] 오류가 발생했거나 동작이 안 될 때
+> ```text
+> 주보를 생성하는 도중 아래와 같은 오류가 발생했어. 원인을 분석하고 즉시 고쳐줘:
+> 
+> [오류 메시지 또는 문제 상황 붙여넣기]
+> ```
+
+---
+
+## 🚀 3. 매주 주보 제작 3단계 실전 워크플로우
+
+설정이 끝난 후, 매주 주보를 만들 때는 아래 **3단계**로 진행합니다:
 
 ```text
 [ 설교 메모 / 행사 원고 ]
            │
-           ▼ 1단계 (AI 비서에게 원고 전달)
-[ data/inputs/20260823.yaml 저장 ]
+           ▼ 1단계: AI 비서에게 원고 전달 (프롬프트 2번 활용)
+[ data/inputs/20260823.yaml 자동 생성 ]
            │
-           ▼ 2단계 (배치파일 더블클릭 또는 스크립트 실행)
-[ 1초 만에 HWPX XML 치환 생성 ]
+           ▼ 2단계: 바탕화면/폴더의 배치파일 더블클릭
+[ scripts/generate_bulletin.bat 실행 (1초 완성) ]
            │
-           ▼ 3단계 (한글에서 열어 인쇄)
-[ 🖨️ 교회 컬러 프린터 A4 인쇄 ]
+           ▼ 3단계: 한글에서 열기
+[ 🖨️ output/[주보] 20260823.hwpx 컬러 인쇄 ]
 ```
 
----
-
-### 1단계 — 주간 원고 YAML 준비 (AI 비서 활용)
-
-매주 교역자/사무원이 작성한 설교 제목, 성경 본문, 교회 소식 메모를 AI(ChatGPT, Claude, Antigravity 등)에게 아래 프롬프트와 함께 전달합니다:
-
-> **AI 전달 프롬프트:**
-> ```text
-> 아래 주보 원고를 읽고 Sunday Bulletin용 YAML 포맷으로 정제해줘:
-> 
-> [원고 내용 붙여넣기]
-> ```
-
-생성된 내용을 **`data/inputs/20260823.yaml`** (해당 주일 날짜) 파일로 저장합니다.
-
-<details>
-<summary><b>📄 YAML 파일 예시 (data/samples/sample_hyanglin_20260816.yaml 참고)</b></summary>
-
-```yaml
-metadata:
-  date_compact: "20260823"
-  date_korean: "2026년 8월 23일"
-  foundation_year: "73"
-  unification_year: "82"
-  season: "성령강림 후 열셋째주일"
-  motto: "작은 믿음 다시 모아 새로 심는 향린 73"
-  headline_left: "환경선교주일 연합예배"
-  headline_right: "청년부 여름 농촌봉사활동 보고"
-
-worship_1:
-  call_scripture: "시편 104:24-30"
-  opening_hymn: "찬송 478장"
-  scripture: "창세기 1:26-31"
-  sermon_title: "창조의 숨결을 회복하라"
-  preacher: "담임목사"
-  response_hymn: "찬송 470장"
-  offering_hymn: "찬송가 50장 1절"
-  benediction: "담임목사"
-
-announcements:
-  - title: "환경선교주일 녹색 헌금 안내"
-    content: "생명과 환경을 지키는 선교 사역에 사용됩니다."
-  - title: "정기 당회"
-    content: "오늘 오후 1시 30분 당회실"
-  - title: "구역장 모임"
-    content: "8/27(목) 19:00 향우실"
-
-prayer_requests:
-  - name: "김향린 교우"
-    content: "건강 회복과 치료를 위해 기도해 주세요."
-```
-</details>
+1. **1단계 (원고 정제)**: AI 비서에게 이번 주 메모를 주고 `data/inputs/YYYYMMDD.yaml`로 저장합니다.
+2. **2단계 (원클릭 생성)**:
+   - **윈도우**: `scripts/generate_bulletin.bat` **더블클릭**
+   - **리눅스/Mac**: `./scripts/generate_bulletin.sh`
+   - **CLI**: `python3 src/main.py --data data/inputs/YYYYMMDD.yaml`
+3. **3단계 (인쇄)**: `output/[주보] YYYYMMDD.hwpx`를 한글 프로그램에서 열고 `Ctrl + P`를 눌러 교회 컬러 프린터로 인쇄합니다.
 
 ---
 
-### 2단계 — 원클릭 주보 생성 실행
-
-- **윈도우 사용자 (권장)**:
-  - `scripts/generate_bulletin.bat` 파일을 **더블클릭**합니다.
-  - `data/inputs/` 폴더 내 가장 최신 YAML 파일을 자동 감지하여 주보를 생성하고, 생성이 완료되면 `output/` 폴더를 자동으로 열어줍니다.
-- **리눅스 / macOS 사용자**:
-  ```bash
-  ./scripts/generate_bulletin.sh
-  ```
-- **CLI 직접 실행**:
-  ```bash
-  python3 src/main.py --data data/inputs/20260823.yaml --output output/
-  ```
-
----
-
-### 3단계 — 출력 결과 확인 및 인쇄
-
-- `output/` 폴더에 생성된 **`[주보] 20260823.hwpx`** 파일을 한컴오피스 한글에서 엽니다.
-- 기존 주보와 100% 동일한 서식(표, 글자 장평, 배분 정렬)이 유지되었는지 확인한 후, **`Ctrl + P` (인쇄)**를 눌러 컬러 프린터로 출력합니다.
-
----
-
-## 🏷️ HWPX 템플릿 지원 태그 일람표 (Tag Reference)
+## 🏷️ 4. HWPX 템플릿 지원 태그 일람표 (Tag Reference)
 
 `templates/hwpx/template.hwpx` 양식 파일 내에서 아래의 태그들을 사용하면 YAML 데이터와 1:1 자동 매핑됩니다:
 
@@ -135,7 +135,7 @@ prayer_requests:
 
 ---
 
-## 🏛️ 문서 및 AI 설정의 SSOT
+## 🏛️ 5. 문서 및 AI 설정의 SSOT
 
 이 프로젝트는 하나의 파일에 모든 정보를 모으지 않습니다. 각 정보 영역은 아래 위치만 원본으로 관리하며, Codex·Claude Code·Cursor의 진입점 파일은 이 원본을 참조하는 얇은 래퍼로 유지합니다.
 
@@ -150,7 +150,7 @@ prayer_requests:
 
 ---
 
-## 📊 도구별 종합 채점 및 적합도 순위 (10점 만점)
+## 📊 6. 도구별 종합 채점 및 적합도 순위 (10점 만점)
 
 | 순위 | 도구 및 방식 | 서식 재현도 (장평/표) | 윈도우/컬러인쇄 적합성 | 비용 (무료 여부) | **최종 평점** | 종합 평가 |
 | :---: | :--- | :---: | :---: | :---: | :---: | :--- |
@@ -160,16 +160,9 @@ prayer_requests:
 
 ---
 
-## 💻 개발 및 테스트 가이드
+## 💻 7. 개발자 및 테스트 가이드
 
-### 가상환경 설정 및 패키지 설치
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-### 단위 테스트 실행
-```bash
+# 단위 테스트 실행
 python3 -m unittest discover tests -v
 ```
