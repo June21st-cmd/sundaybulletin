@@ -1,7 +1,7 @@
 """Main CLI entry point for Sunday Bulletin generator."""
 import argparse
-import sys
 from pathlib import Path
+import sys
 
 # Ensure project root is in sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -28,7 +28,7 @@ def parse_args():
         "-e",
         choices=["hwpx", "typst", "all"],
         default="all",
-        help="Target generator engine (hwpx, typst, or all)",
+        help="Target generator engine (hwpx, typst, or all - default: all)",
     )
     parser.add_argument(
         "--output",
@@ -58,36 +58,47 @@ def main():
     out_dir = Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"📖 Loading bulletin data from: {data_path}")
+    print(f"📖 주보 원고 데이터를 로드합니다: {data_path}")
     data = load_bulletin_data(data_path)
-    bulletin_date = data.get("date", "bulletin").replace("-", "")
+
+    # Determine date compact string for output filename
+    meta = data.get("metadata", {})
+    if isinstance(meta, dict) and meta.get("date_compact"):
+        date_str = meta["date_compact"]
+    elif data.get("date"):
+        date_str = str(data["date"]).replace("-", "")
+    else:
+        date_str = "latest"
 
     # 1. HWPX Engine Execution
     if args.engine in ["hwpx", "all"]:
-        if Path(args.hwpx_template).is_file():
-            print(f"🖨️ Generating HWPX with template: {args.hwpx_template}")
-            hwpx_engine = HwpxEngine(args.hwpx_template)
-            out_hwpx = out_dir / f"bulletin_{bulletin_date}.hwpx"
+        hwpx_tpl = Path(args.hwpx_template)
+        if hwpx_tpl.is_file():
+            print(f"🖨️ HWPX 템플릿 치환 중: {hwpx_tpl.name}")
+            hwpx_engine = HwpxEngine(hwpx_tpl)
+            out_hwpx = out_dir / f"[주보] {date_str}.hwpx"
             hwpx_engine.generate(data, out_hwpx)
-            print(f"✅ HWPX created: {out_hwpx}")
+            file_size_mb = out_hwpx.stat().st_size / (1024 * 1024)
+            print(f"✅ HWPX 인쇄본 생성 완료: {out_hwpx} ({file_size_mb:.2f} MB)")
         else:
-            print(f"⚠️ HWPX template not found ({args.hwpx_template}), skipping HWPX.")
+            print(f"⚠️ HWPX 템플릿이 존재하지 않습니다 ({hwpx_tpl}), HWPX 생성을 건너뜁니다.")
 
     # 2. Typst Engine Execution
     if args.engine in ["typst", "all"]:
-        if Path(args.typst_template).is_file():
-            print(f"🎨 Compiling Typst with template: {args.typst_template}")
-            typst_engine = TypstEngine(args.typst_template)
-            out_pdf = out_dir / f"bulletin_{bulletin_date}.pdf"
+        typst_tpl = Path(args.typst_template)
+        if typst_tpl.is_file():
+            print(f"🎨 Typst PDF 컴파일 중: {typst_tpl.name}")
+            typst_engine = TypstEngine(typst_tpl)
+            out_pdf = out_dir / f"[주보] {date_str}.pdf"
             try:
                 typst_engine.compile(out_pdf)
-                print(f"✅ Typst PDF created: {out_pdf}")
+                print(f"✅ Typst PDF 생성 완료: {out_pdf}")
             except Exception as e:
-                print(f"⚠️ Typst compile skipped or failed: {e}")
+                print(f"⚠️ Typst 컴파일 생략 (선택 엔진): {e}")
         else:
-            print(f"⚠️ Typst template not found ({args.typst_template}), skipping Typst.")
+            print(f"⚠️ Typst 템플릿이 존재하지 않습니다 ({typst_tpl}), Typst 생성을 건너뜁니다.")
 
-    print("🎉 All tasks completed successfully.")
+    print("\n🎉 모든 주보 생성 작업이 완료되었습니다.")
 
 
 if __name__ == "__main__":
