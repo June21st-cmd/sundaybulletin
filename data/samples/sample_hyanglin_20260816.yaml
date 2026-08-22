@@ -1,0 +1,50 @@
+# 향린교회 주간 주보 입력 데이터 샘플 (2026-08-16)
+metadata:
+  date_compact: "20260816"
+  date_korean: "2026년 8월 16일"
+  foundation_year: "73"
+  unification_year: "82"
+  season: "성령강림 후 열두째주일"
+  motto: "작은 믿음 다시 모아 새로 심는 향린 73"
+  headline_left: "초청 하늘뜻펴기(허석헌 목사) ╻ 평화통일주일 성만찬예식"
+  headline_right: "사회부 수련회 ╻ 8.15자주평화대행진 릴레이발언"
+
+worship_1:
+  call_scripture: "시편 67:4-5"
+  opening_hymn: "찬송 324장 (예수 나를 오라 하네)"
+  scripture: "누가복음 10:25-37"
+  sermon_title: "선한 이웃은 누구인가"
+  preacher: "허석헌 목사"
+  response_hymn: "찬송 218장"
+  offering_hymn: "찬송가 50장 1절"
+  benediction: "담임목사"
+
+worship_2:
+  call_scripture: "시편 67:4-5"
+  opening_hymn: "찬송 324장 (예수 나를 오라 하네)"
+  scripture: "누가복음 10:25-37"
+  sermon_title: "선한 이웃은 누구인가"
+  preacher: "허석헌 목사"
+  response_hymn: "찬송 218장"
+  offering_hymn: "찬송가 50장 1절"
+  benediction: "담임목사"
+
+announcements:
+  - title: "교회 장학금(상반기) 신청"
+    content: "교회 이메일(hyanglin24@gmail.com), 양식 및 신청방법: 교회 홈페이지 장학위원회 최근 게시글 참고 ※문의: 목회실"
+  - title: "정기 목회운영위원회"
+    content: "8/20(목) 19:00, 향린교회 향우실"
+  - title: "심방 신청"
+    content: "심방이 필요하신 분은 신청 바랍니다. ※문의: 목회실, 노재열 장로"
+  - title: "성서배움마당 「주의 기도」 2강"
+    content: "“하늘과 같이” 주일 오후 1시 30분 세미나실"
+  - title: "교회교육주일 예배"
+    content: "다음 주일은 어린이부와 청소년부가 함께 드리는 교육주일 예배로 지킵니다."
+
+prayer_requests:
+  - name: "김향린 교우"
+    content: "건강 회복과 치료를 위해 기도해 주세요."
+  - name: "이평화 교우"
+    content: "군 복무 중 안전을 위해 기도해 주세요."
+  - name: "박희망 교우"
+    content: "새로운 학업과 진로를 위해 기도해 주세요."
