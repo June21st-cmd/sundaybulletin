@@ -1,0 +1,67 @@
+# 9월 13일 향린교회 주보 입력 데이터 (2026-09-13)
+metadata:
+  date_compact: "20260913"
+  date_korean: "2026년 9월 13일"
+  foundation_year: "73"
+  unification_year: "82"
+  season: "성령강림 후 열여섯째주일"
+  motto: "작은 믿음 다시 모아\n새로 심는 향린 73"
+  headline_left: "하늘뜻펴기(무엇을 구하는가?)"
+  headline_right: "성령강림 후 열여섯째주일"
+
+worship_1:
+  call_scripture: "갈라디아서 5:25-26"
+  opening_hymn: "찬송 64장 (기뻐하며 경배하세)"
+  choir_song_title: ""
+  choir_song_info: ""
+  choir_song_lyrics_1: ""
+  choir_song_lyrics_2: ""
+  scripture: "갈라디아서 5:25-26"
+  responsive_scripture_ref: "갈라디아서 5:25-26"
+  responsive_scripture_1: "우리가 성령으로 삶을 얻었으니, 우리는 성령이 인도해 주심을 따라 살아갑시다."
+  responsive_scripture_2: "우리는 잘난 체하거나 서로 노엽게 하거나 질투하거나 하지 않도록 합시다."
+  responsive_scripture_3: ""
+  gospel: ""
+  sermon_title: "무엇을 구하는가?"
+  preacher: "한문덕 목사"
+  confession_or_lord_prayer: "주기도송(1) 245장" # 9월 규칙: 9월 주기도송(1) 245장, 10월 신앙고백송(국악찬송 254장)
+  response_hymn: "국악찬송 60장 (주 품 안에 하나라에)"
+  decision_hymn: "국악찬송 60장 (주 품 안에 하나라에)"
+  offering_hymn: "국악찬송 60장 (주 품 안에 하나라에)"
+  benediction: "담임목사"
+
+next_week:
+  date: "2026년 9월 20일"
+  scripture: "사무엘상서 3:1-10, 고린도전서 8:1-3, 요한복음서 1:9-14"
+  old_testament: "사무엘상서 3:1-10"
+  epistle: "고린도전서 8:1-3"
+  gospel: "요한복음서 1:9-14"
+
+duties:
+  w1:
+    date: "09/13"
+    presider: "예배위원"
+    pastoral_prayer: "예배위원"
+    scripture_reader: "교우"
+    preacher: "한문덕 목사"
+    thanks_prayer: "교우"
+  w2:
+    date: "09/20"
+    presider: "예배위원"
+    pastoral_prayer: "예배위원"
+    scripture_reader: "교우"
+    preacher: "한문덕 목사"
+    thanks_prayer: "교우"
+
+service_duties_september:
+  worship_guides: "김경민 강정희"
+  fellowship_meal: "청여"
+  recycling: "관리부 희남"
+
+announcements:
+  - title: "다음 주 성서본문 안내 (9월 20일)"
+    content: "사무엘상서 3:1-10, 고린도전서 8:1-3, 요한복음서 1:9-14"
+
+lifestyle_pledge:
+  number: 9 # 9월 생활실천다짐 9번 조항
+  text: "우리는 하나님께서 주신 모든 생명을 있는 그대로 소중히 여기는 것이 하나님의 뜻이라 믿으며, 어린이ㆍ청소년들의 심리와 교육 상태를 이해하고, 그들의 교육 환경과 사회 환경을 개선하기 위해 노력한다."

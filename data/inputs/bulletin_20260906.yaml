@@ -1,0 +1,57 @@
+# 9월 6일 향린교회 주보 생성 데이터 (2026-09-06)
+metadata:
+  date_compact: "20260906"
+  date_korean: "2026년 9월 6일"
+  foundation_year: "73"
+  unification_year: "82"
+  season: "성령강림 후 열다섯째주일"
+  motto: "작은 믿음 다시 모아\n새로 심는 향린 73"
+  headline_left: "선교부 신학공부 모임 ╻ 2부 예배 섬김"
+  headline_right: "사회부 수련회 ╻ 청년신도회 식사봉사"
+
+worship_1:
+  call_scripture: "시편 119:33-34"
+  opening_hymn: "찬송가 선택 필요"
+  choir_song_title: "주님 지으신 솜씨"
+  choir_song_info: "(글: Cecil Frances Alexander, 곡: Joseph M. Martin)"
+  choir_song_lyrics_1: "아름답고 찬란한 주의 세계라 주가 만든 모든 것 놀랍고 놀라워"
+  choir_song_lyrics_2: "저 피어나는 꽃들과 노래하는 새들 우리 주의 만드신 솜씨 잘 드러내도다"
+  scripture: "시편 119:33-34 ( 쪽), 홈페이지 성서본문 자동참고 ( 쪽)"
+  responsive_scripture_ref: "시편 119:33-34"
+  responsive_scripture_1: "[교독송 가사 직접 채우기]"
+  gospel: "복음서 읽기 본문 (홈페이지 참고)"
+  sermon_title: "[하늘뜻펴기 제목 미정]"
+  preacher: "담임목사"
+  confession_or_lord_prayer: "주기도송(1) 245장" # 9월 규칙: 1,5,9월 주기도송(1) 245장
+  response_hymn: "찬송가 선택 필요"
+  offering_hymn: "찬송가 50장 1절"
+  benediction: "담임목사"
+
+duties:
+  w1:
+    date: "09/06"
+    presider: "김기수 장로"
+    pastoral_prayer: "하상우 집사"
+    scripture_reader: "교우"
+    preacher: "한문덕 목사"
+    thanks_prayer: "교우"
+  w2:
+    date: "09/13"
+    presider: "예배위원 선택"
+    pastoral_prayer: "예배위원 선택"
+    scripture_reader: "예배위원 선택"
+    preacher: "한문덕 목사"
+    thanks_prayer: "예배위원 선택"
+
+service_duties_september:
+  worship_guides: "김경민 강정희"
+  fellowship_meal: "청여"
+  recycling: "관리부 희남"
+
+announcements:
+  - title: "이번 주 일정 및 공지"
+    content: "9월 6일 이후 소식 기준 배치"
+
+lifestyle_pledge:
+  number: 9 # 9월 생활실천다짐 9번 조항
+  text: "우리는 하나님께서 주신 모든 생명을 있는 그대로 소중히 여기는 것이 하나님의 뜻이라 믿으며, 어린이ㆍ청소년들의 심리와 교육 상태를 이해하고, 그들의 교육 환경과 사회 환경을 개선하기 위해 노력한다."
