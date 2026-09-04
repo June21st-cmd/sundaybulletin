@@ -88,8 +88,9 @@ class HwpxEngine:
             flat_map["worship_response_hymn"] = str(worship.get("response_hymn", ""))
             flat_map["응답찬송"] = flat_map["worship_response_hymn"]
 
-            flat_map["worship_offering_hymn"] = str(worship.get("offering_hymn", ""))
+            flat_map["worship_offering_hymn"] = str(worship.get("decision_hymn", worship.get("offering_hymn", "")))
             flat_map["봉헌찬송"] = flat_map["worship_offering_hymn"]
+            flat_map["결단찬송"] = flat_map["worship_offering_hymn"]
 
             flat_map["worship_benediction"] = str(worship.get("benediction", ""))
             flat_map["축복기도"] = flat_map["worship_benediction"]
@@ -184,6 +185,17 @@ class HwpxEngine:
                         escaped_val = html.escape(val)
                         xml_text = xml_text.replace(f"{{{{{key}}}}}", escaped_val)
                         xml_text = xml_text.replace(f"{{{{ {key} }}}}", escaped_val)
+
+                    # Dynamic liturgical hymn substitution (주기도송 vs 신앙고백송)
+                    confession = flat_map.get("confession_or_lord_prayer", "")
+                    if not confession:
+                        worship_dict = data.get("worship_1", data.get("worship", {}))
+                        if isinstance(worship_dict, dict):
+                            confession = str(worship_dict.get("confession_or_lord_prayer", ""))
+                    if "주기도" in confession:
+                        xml_text = xml_text.replace("신 앙 고 백 송", "주 기 도 송")
+                        song_target = confession if "장" in confession else "주기도송 245장"
+                        xml_text = xml_text.replace("국악찬송 254장", song_target)
 
                     # Auto-clean any remaining unreplaced slots
                     xml_text = re.sub(r"\{\{[^}]+\}\}", "", xml_text)
