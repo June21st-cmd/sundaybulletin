@@ -29,6 +29,7 @@ class HwpxEngine:
             flat_map["unification_year"] = str(meta.get("unification_year", "82"))
             flat_map["통일염원"] = flat_map["unification_year"]
             
+            flat_map["date"] = str(meta.get("date", ""))
             flat_map["date_korean"] = str(meta.get("date_korean", meta.get("date", "")))
             flat_map["주일일자"] = flat_map["date_korean"]
             
@@ -192,21 +193,50 @@ class HwpxEngine:
                         worship_dict = data.get("worship_1", data.get("worship", {}))
                         if isinstance(worship_dict, dict):
                             confession = str(worship_dict.get("confession_or_lord_prayer", ""))
+                    
+                    # "주기도문송" 표기 정규화 -> 반드시 "주기도송"으로 통일
+                    confession = confession.replace("주기도문송", "주기도송").strip()
+
+                    # 일자 기반 월(month) 추출 (미지정 시 기본 찬송 번호 보완용)
+                    date_str = str(flat_map.get("date") or flat_map.get("date_korean") or "")
+                    month = None
+                    m_match = re.search(r"[-./](\d{1,2})[-./]|\b(\d{1,2})월", date_str)
+                    if m_match:
+                        month = int(m_match.group(1) or m_match.group(2))
+
                     if "주기도" in confession:
                         xml_text = xml_text.replace("신 앙 고 백 송", "주 기 도 송")
-                        song_target = confession if "장" in confession else "주기도송 245장"
+                        if "장" in confession:
+                            song_target = confession
+                        elif month in [3, 7, 11]:
+                            song_target = "주기도송(2) 246장"
+                        else:
+                            song_target = "주기도송(1) 245장"
                         xml_text = xml_text.replace("국악찬송 254장", song_target)
+                    elif "신앙고백" in confession:
+                        if confession and confession != "국악찬송 254장":
+                            xml_text = xml_text.replace("국악찬송 254장", confession)
 
                     # Auto-clean any remaining unreplaced slots
                     xml_text = re.sub(r"\{\{[^}]+\}\}", "", xml_text)
 
+                    # Remove linesegarray cache tags to prevent Hancom Office "tampered document" false-alarm.
+                    # Hancom recalculates text layouts automatically when linesegarray is absent.
+                    xml_text = re.sub(r'<(?:\w+:)?linesegarray[^>]*>.*?</(?:\w+:)?linesegarray>|<(?:\w+:)?linesegarray[^>]*/>', '', xml_text, flags=re.DOTALL)
+
                     xml_file.write_text(xml_text, encoding="utf-8")
 
-            # 3. Repack HWPX zip
-            with zipfile.ZipFile(output_file, 'w', zipfile.ZIP_DEFLATED) as zip_out:
-                for file_item in temp_path.rglob("*"):
-                    if file_item.is_file():
-                        arcname = file_item.relative_to(temp_path)
-                        zip_out.write(file_item, arcname)
+            # 3. Repack HWPX zip strictly compliant with KS X 6101 / OCF standard
+            with zipfile.ZipFile(output_file, 'w') as zip_out:
+                # 1) mimetype MUST be the very first entry and stored uncompressed (ZIP_STORED)
+                mimetype_file = temp_path / "mimetype"
+                if mimetype_file.is_file():
+                    zip_out.write(mimetype_file, "mimetype", compress_type=zipfile.ZIP_STORED)
+                
+                # 2) Write other entries with standard compression (ZIP_DEFLATED)
+                for file_item in sorted(temp_path.rglob("*")):
+                    if file_item.is_file() and file_item.name != "mimetype":
+                        arcname = file_item.relative_to(temp_path).as_posix()
+                        zip_out.write(file_item, arcname, compress_type=zipfile.ZIP_DEFLATED)
 
         return output_file
