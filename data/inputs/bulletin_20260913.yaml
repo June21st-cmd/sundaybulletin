@@ -4,10 +4,10 @@ metadata:
   date_korean: "2026년 9월 13일"
   foundation_year: "73"
   unification_year: "82"
-  season: "성령강림 후 열여섯째주일"
+  season: "창조절 둘째주일/글리온40주년 특별기념주일"
   motto: "작은 믿음 다시 모아\n새로 심는 향린 73"
-  headline_left: "하늘뜻펴기(무엇을 구하는가?)"
-  headline_right: "성령강림 후 열여섯째주일"
+  headline_left: "╻"
+  headline_right: ""
 
 worship_1:
   call_scripture: "갈라디아서 5:25-26"
@@ -40,7 +40,7 @@ next_week:
 duties:
   w1:
     date: "09/13"
-    presider: "예배위원"
+    presider: "강은성 장로"
     pastoral_prayer: "예배위원"
     scripture_reader: "교우"
     preacher: "한문덕 목사"
