@@ -68,7 +68,7 @@ class TestHwpxEngine(unittest.TestCase):
             xml_file = contents_dir / "section0.xml"
             xml_template = "<p>신 앙 고 백 송</p><p>국악찬송 254장</p>"
 
-            # 1. 1,5,9월: 주기도문송(1) 245장 입력 시 -> 주기도송(1) 245장으로 정규화 및 치환
+            # 1. 1,5,9월: 주기도문송(1) 245장 입력 시 -> 좌측 "주 기 도 송", 우측 "국악찬송 245장"으로 정규화 및 치환
             xml_file.write_text(xml_template, encoding="utf-8")
             with zipfile.ZipFile(mock_hwpx, "w") as z:
                 z.write(xml_file, "Contents/section0.xml")
@@ -83,11 +83,11 @@ class TestHwpxEngine(unittest.TestCase):
             with zipfile.ZipFile(out_hwpx1, "r") as z_out:
                 res1 = z_out.read("Contents/section0.xml").decode("utf-8")
                 self.assertIn("주 기 도 송", res1)
-                self.assertIn("주기도송(1) 245장", res1)
+                self.assertIn("국악찬송 245장", res1)
                 self.assertNotIn("주기도문송", res1)
                 self.assertNotIn("신 앙 고 백 송", res1)
 
-            # 2. 3,7,11월: 3월에 "주기도송"만 지정 시 -> 주기도송(2) 246장 기본값 보완
+            # 2. 3,7,11월: 3월에 "주기도송"만 지정 시 -> 좌측 "주 기 도 송", 우측 "국악찬송 246장" 기본값 보완
             out_hwpx2 = temp_path / "out2.hwpx"
             data2 = {
                 "metadata": {"date": "2026-03-08"},
@@ -97,7 +97,8 @@ class TestHwpxEngine(unittest.TestCase):
             with zipfile.ZipFile(out_hwpx2, "r") as z_out:
                 res2 = z_out.read("Contents/section0.xml").decode("utf-8")
                 self.assertIn("주 기 도 송", res2)
-                self.assertIn("주기도송(2) 246장", res2)
+                self.assertIn("국악찬송 246장", res2)
+
 
     def test_real_master_template_generation(self):
         template_path = Path("templates/hwpx/template.hwpx")
@@ -112,6 +113,29 @@ class TestHwpxEngine(unittest.TestCase):
                 result = engine.generate(data, out_path)
                 self.assertTrue(result.is_file())
                 self.assertGreater(result.stat().st_size, 1000)
+
+    def test_custom_asset_qr_and_announcement_spacing(self):
+        template_path = Path("templates/hwpx/template.hwpx")
+        data_path = Path("data/inputs/bulletin_20260913.yaml")
+        if template_path.is_file() and data_path.is_file():
+            data = load_bulletin_data(data_path)
+            engine = HwpxEngine(template_path)
+            with tempfile.TemporaryDirectory() as temp_dir:
+                out_path = Path(temp_dir) / "test_qr.hwpx"
+                result = engine.generate(data, out_path)
+                with zipfile.ZipFile(result, "r") as z:
+                    names = z.namelist()
+                    self.assertIn("BinData/image6.bmp", names)  # 교독송 후렴 악보 안전 보존
+                    self.assertIn("BinData/image8.png", names)  # QR코드 독립 ID
+                    sec0 = z.read("Contents/section0.xml").decode("utf-8")
+                    self.assertIn("1191766890", sec0)  # pic ID
+                    self.assertIn("2gtkk.png", sec0)
+                    self.assertIn("김은주(새청, 9/06)", sec0)
+                    self.assertIn('cellSz width="39958"', sec0)  # 하늘뜻펴기 확장 병합 셀
+                    hdr = z.read("Contents/header.xml").decode("utf-8")
+                    self.assertIn('lineSpacing type="PERCENT" value="165"', hdr)  # 165% 줄간격
+                    self.assertIn('ratio hangul="90"', hdr)  # 장평 90%
+                    self.assertIn('spacing hangul="0"', hdr)  # 자간 0%
 
 
 if __name__ == "__main__":

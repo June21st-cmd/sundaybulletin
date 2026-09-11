@@ -18,6 +18,7 @@ from src.config import DEFAULT_HWPX_TEMPLATE, DEFAULT_TYPST_TEMPLATE, OUTPUT_DIR
 from src.hwpx_engine import HwpxEngine
 from src.parser import load_bulletin_data
 from src.typst_engine import TypstEngine
+from src.utils import get_versioned_bulletin_paths
 
 
 def parse_args():
@@ -55,6 +56,11 @@ def parse_args():
         default=str(DEFAULT_TYPST_TEMPLATE),
         help="Path to custom Typst template",
     )
+    parser.add_argument(
+        "--no-version",
+        action="store_true",
+        help="Do not add version suffix (_v1, _v2) to output files",
+    )
     return parser.parse_args()
 
 
@@ -76,16 +82,22 @@ def main():
     else:
         date_str = "latest"
 
+    base_stem = f"[주보] {date_str}"
+    if args.no_version:
+        out_hwpx = out_dir / f"{base_stem}.hwpx"
+        out_pdf = out_dir / f"{base_stem}.pdf"
+    else:
+        out_hwpx, out_pdf = get_versioned_bulletin_paths(out_dir, base_stem)
+
     # 1. HWPX Engine Execution
     if args.engine in ["hwpx", "all"]:
         hwpx_tpl = Path(args.hwpx_template)
         if hwpx_tpl.is_file():
             print(f"🖨️ HWPX 템플릿 치환 중: {hwpx_tpl.name}")
             hwpx_engine = HwpxEngine(hwpx_tpl)
-            out_hwpx = out_dir / f"[주보] {date_str}.hwpx"
-            hwpx_engine.generate(data, out_hwpx)
-            file_size_mb = out_hwpx.stat().st_size / (1024 * 1024)
-            print(f"✅ HWPX 인쇄본 생성 완료: {out_hwpx} ({file_size_mb:.2f} MB)")
+            actual_hwpx = hwpx_engine.generate(data, out_hwpx)
+            file_size_mb = actual_hwpx.stat().st_size / (1024 * 1024)
+            print(f"✅ HWPX 인쇄본 생성 완료: {actual_hwpx} ({file_size_mb:.2f} MB)")
         else:
             print(f"⚠️ HWPX 템플릿이 존재하지 않습니다 ({hwpx_tpl}), HWPX 생성을 건너뜁니다.")
 
@@ -95,7 +107,6 @@ def main():
         if typst_tpl.is_file():
             print(f"🎨 Typst PDF 컴파일 중: {typst_tpl.name}")
             typst_engine = TypstEngine(typst_tpl)
-            out_pdf = out_dir / f"[주보] {date_str}.pdf"
             try:
                 typst_engine.compile(out_pdf)
                 print(f"✅ Typst PDF 생성 완료: {out_pdf}")
