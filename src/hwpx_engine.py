@@ -172,6 +172,7 @@ class HwpxEngine:
             flat_map["responsive_scripture_1"] = str(worship.get("responsive_scripture_1", ""))
             flat_map["responsive_scripture_2"] = str(worship.get("responsive_scripture_2", ""))
             flat_map["responsive_scripture_3"] = str(worship.get("responsive_scripture_3", ""))
+            flat_map["responsive_scripture_4"] = str(worship.get("responsive_scripture_4", ""))
 
             flat_map["worship_gospel"] = str(worship.get("gospel", ""))
             flat_map["복음서읽기"] = flat_map["worship_gospel"]
@@ -380,18 +381,31 @@ class HwpxEngine:
                         clean_3rows = f"{build_duty_row_template('duty_w1', 18)}\n{build_duty_row_template('duty_w2', 19)}\n{build_duty_row_template('duty_w3', 20)}"
                         xml_text = re.sub(duty_3rows_pattern, clean_3rows, xml_text)
 
-                    # 미가서 본문 단일 문단 최적화 (불필요한 빈 문단 없이 4줄로 알맞게 수용)
-                    if not flat_map.get("responsive_scripture_2") and not flat_map.get("responsive_scripture_3"):
-                        xml_text = re.sub(
-                            r'<(?:\w+:)?p\b[^>]*>\s*<(?:\w+:)?run[^>]*><(?:\w+:)?t>\{\{responsive_scripture_2\}\}</(?:\w+:)?t></(?:\w+:)?run>.*?</(?:\w+:)?p>',
-                            '',
-                            xml_text
-                        )
-                        xml_text = re.sub(
-                            r'<(?:\w+:)?p\b[^>]*>\s*<(?:\w+:)?run[^>]*><(?:\w+:)?t>\{\{responsive_scripture_3\}\}</(?:\w+:)?t></(?:\w+:)?run>.*?</(?:\w+:)?p>',
-                            '',
-                            xml_text
-                        )
+                    # 함께읽는말씀 본문 (사용자 수동 편집 서식 영구 반영)
+                    # responsive_scripture_1~4 또는 줄바꿈 텍스트를 각 독립 문단(paraPr 66, charPr 95)으로 완벽 조판
+                    resp_lines = []
+                    for k in ["responsive_scripture_1", "responsive_scripture_2", "responsive_scripture_3", "responsive_scripture_4"]:
+                        val = str(flat_map.get(k, "")).strip()
+                        if val:
+                            resp_lines.append(val)
+                    if not resp_lines and flat_map.get("responsive_scripture"):
+                        resp_lines = [l.strip() for l in str(flat_map.get("responsive_scripture")).splitlines() if l.strip()]
+
+                    if resp_lines:
+                        resp_p_list = []
+                        for i, line_text in enumerate(resp_lines):
+                            p_id = "2147483648" if i == 0 else "0"
+                            resp_p_list.append(
+                                f'<ns1:p id="{p_id}" paraPrIDRef="66" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">'
+                                f'<ns1:run charPrIDRef="95"><ns1:t>{html.escape(line_text)}</ns1:t></ns1:run>'
+                                f'</ns1:p>'
+                            )
+                        resp_cell_sublist = "".join(resp_p_list)
+                        resp_pattern = r'<(?:\w+:)?tc\b[^>]*>(?:(?!</(?:\w+:)?tc>).)*?colAddr="1"\s*rowAddr="17".*?</(?:\w+:)?tc>'
+                        def repl_resp_cell(match):
+                            tc = match.group(0)
+                            return re.sub(r'<(?:\w+:)?subList[^>]*>.*?</(?:\w+:)?subList>', f'<ns1:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">{resp_cell_sublist}</ns1:subList>', tc, flags=re.DOTALL)
+                        xml_text = re.sub(resp_pattern, repl_resp_cell, xml_text, flags=re.DOTALL)
 
                     # 건강회복 명단 2행 분리 복원 (1문단 11명, 2문단 11명으로 각각 1줄씩 깔끔 배치)
                     healing_1 = flat_map.get("healing_prayer_1", "")
