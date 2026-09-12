@@ -82,6 +82,19 @@ class HwpxEngine:
         ("이번주 성서일과", -1),
     ]
 
+    LIFESTYLE_PLEDGES = {
+        1: "우리는 하나님 나라의 일꾼으로 이 땅에 파송되었음을 믿으며, 하나님 나라의 실현을 위해 성서공부, 기도, 신앙ㆍ신학서적 읽기 등 일상의 신앙훈련을 통해 사회선교의 영성을 키운다.",
+        2: "우리는 교인들 한 명 한 명의 주체적 참여가 교회 민주주의의 근간이 된다고 믿으며, 이를 위해 각 신도회와 부서, 평화나눔공동체 등 교회 모임에 적극적으로 참여한다.",
+        3: "우리는 우리의 삶과 숨결이 녹아 있는 우리 가락과 정서로 하나님께 예배드릴 때 더욱 뜻깊은 예배가 된다고 믿으며, 우리 가락이나 우리 악기를 배우기 위해 힘쓴다.",
+        4: "우리는 평화를 위하여 일하는 이가 하나님의 자녀임을 믿으며, 국가보안법 폐지와 한반도 평화협정 실현을 위한 활동에 나선다.",
+        5: "우리는 분단된 겨레를 하나 되게 하는 것이 하나님의 뜻이라 믿으며, 평화통일을 이루기 위해 기도하고, 헌금하며, 활동한다.",
+        6: "우리는 누구에게나 햇빛과 비를 주셔서 평등하게 사랑하시는 하나님을 믿으며, 교회와 가정, 직장 등 모든 관계에서 차별적 언어나 행위를 하지 않도록 민감하게 성찰하며 행동한다.",
+        7: "우리는 고통받는 이웃과 함께 아파하시는 하나님을 믿으며, 사회적 불의에 맞서 싸우고, 고통당하는 이웃들과 연대하는 활동에 참여한다.",
+        8: "우리는 창조질서의 보전이 하나님의 뜻이라 믿으며, 자녀들과 함께 일상생활에서 친환경적으로 생활하고 이웃과 힘을 모아 생태적 삶을 실천한다.",
+        9: "우리는 하나님께서 주신 모든 생명을 있는 그대로 소중히 여기는 것이 하나님의 뜻이라 믿으며, 어린이ㆍ청소년들의 심리와 교육 상태를 이해하고, 그들의 교육 환경과 사회 환경을 개선하기 위해 노력한다.",
+        10: "우리는 신앙의 유산을 이어 나가는 것이 하나님의 뜻이라 믿으며, 어린이ㆍ청소년들과 한국교회의 미래를 위해 교회교육이 매우 중요함을 인식하고, 교육 재정 확보, 교사 봉사, 학부모 활동 등을 통해 교회교육을 지원한다.",
+    }
+
     def __init__(self, template_path: Path | str, logo_dir: Path | str | None = None):
         self.template_path = Path(template_path)
         if not self.template_path.is_file():
@@ -133,6 +146,11 @@ class HwpxEngine:
 
             flat_map["worship_opening_hymn"] = str(worship.get("opening_hymn", ""))
             flat_map["여는찬송"] = flat_map["worship_opening_hymn"]
+
+            confession_val = str(worship.get("confession_or_lord_prayer") or worship.get("lord_prayer_hymn") or worship.get("confession_hymn") or worship.get("lord_prayer") or "")
+            flat_map["confession_or_lord_prayer"] = confession_val
+            flat_map["주기도송"] = confession_val
+            flat_map["신앙고백송"] = confession_val
 
             choir_title = str(worship.get("choir_song_title", "")).strip()
             choir_info = str(worship.get("choir_song_info", "")).strip()
@@ -467,15 +485,38 @@ class HwpxEngine:
 
                     if hymn_num in ["245", "246"] or "주기도" in confession:
                         xml_text = xml_text.replace("신 앙 고 백 송", "주 기 도 송")
+                    else:
+                        xml_text = xml_text.replace("주 기 도 송", "신 앙 고 백 송")
 
                     hymn_right_cell = f"국악찬송 {hymn_num}장"
-                    xml_text = re.sub(r"국악찬송\s*254장", hymn_right_cell, xml_text)
+                    xml_text = re.sub(r"국악찬송\s*\d+장", hymn_right_cell, xml_text)
 
                     # Dynamic lifestyle pledge substitution (향린교인 생활실천 다짐 10개 조항 순환)
                     pledge_info = data.get("lifestyle_pledge", {})
-                    if isinstance(pledge_info, dict) and pledge_info.get("text"):
-                        p_num = pledge_info.get("number", "")
-                        p_text = pledge_info.get("text", "")
+                    p_num = ""
+                    p_text = ""
+                    if isinstance(pledge_info, dict):
+                        p_num = str(pledge_info.get("number", "")).strip()
+                        p_text = str(pledge_info.get("text", "")).strip()
+
+                    # 자동 순환 계산 (원고에 명시되지 않거나 비어있는 경우)
+                    if not p_num or not p_text:
+                        d_m = re.search(r"(\d{4})[-.년\s]+(\d{1,2})[-.월\s]+(\d{1,2})", date_str)
+                        if d_m:
+                            try:
+                                import datetime
+                                cur_dt = datetime.date(int(d_m.group(1)), int(d_m.group(2)), int(d_m.group(3)))
+                                base_dt = datetime.date(2026, 9, 6)
+                                diff_weeks = (cur_dt - base_dt).days // 7
+                                calc_num = ((8 + diff_weeks) % 10) + 1
+                                if not p_num:
+                                    p_num = str(calc_num)
+                                if not p_text:
+                                    p_text = self.LIFESTYLE_PLEDGES.get(calc_num, "")
+                            except Exception:
+                                pass
+
+                    if p_num and p_text:
                         pledge_pattern = r'(charPrIDRef="178"[^>]*><(?:\w+:)?t>)\d+\.\s*(</(?:\w+:)?t></(?:\w+:)?run>).*?(</(?:\w+:)?p>)'
                         repl = rf'\g<1>{p_num}. \g<2><ns1:run charPrIDRef="192"><ns1:t>{html.escape(p_text)}</ns1:t></ns1:run>\g<3>'
                         xml_text = re.sub(pledge_pattern, repl, xml_text, flags=re.DOTALL)
