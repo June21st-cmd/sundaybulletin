@@ -153,11 +153,13 @@ class CrossWeekComparator:
         prev_w2 = prev_duties.get("w2", {})
         curr_w1 = curr_duties.get("w1", {})
 
+        PLACEHOLDER_NAMES = {"예배위원 선택", "예배위원", "교우", "미정", "선택", "준비중", "준비 중"}
+
         for role_key, role_name in roles:
             expected_person = str(prev_w2.get(role_key, "")).strip()
             current_person = str(curr_w1.get(role_key, "")).strip()
 
-            if expected_person:
+            if expected_person and expected_person not in PLACEHOLDER_NAMES:
                 if not current_person:
                     issues.append(ReviewIssue(
                         level=IssueLevel.ERROR,
@@ -181,6 +183,8 @@ class CrossWeekComparator:
                     summary["duty_relay_mismatches"].append(f"이번 주 {role_name}: 변경 ({expected_person} ➔ {current_person})")
                 else:
                     summary["duty_relay_matches"].append(f"이번 주 {role_name}: {current_person} (일치)")
+            elif current_person:
+                summary["duty_relay_matches"].append(f"이번 주 {role_name}: {current_person} (확정)")
 
         # Check Relay 2: Last week's w3 -> This week's w2
         prev_w3 = prev_duties.get("w3", {})
@@ -190,7 +194,7 @@ class CrossWeekComparator:
             expected_person = str(prev_w3.get(role_key, "")).strip()
             current_person = str(curr_w2.get(role_key, "")).strip()
 
-            if expected_person and current_person and current_person != expected_person:
+            if expected_person and expected_person not in PLACEHOLDER_NAMES and current_person and current_person != expected_person:
                 issues.append(ReviewIssue(
                     level=IssueLevel.WARNING,
                     category="예배위원릴레이",

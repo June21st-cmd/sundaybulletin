@@ -1,4 +1,4 @@
-﻿"""Integrated bulletin review engine coordinating rule checks, cross-week comparison, and diff tracking."""
+"""Integrated bulletin review engine coordinating rule checks, cross-week comparison, and diff tracking."""
 import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -7,6 +7,7 @@ from .models import BulletinReviewReport, IssueLevel, ReviewIssue
 from .rules import BulletinRuleChecker
 from .cross_week import CrossWeekComparator
 from .diff_tracker import VersionDiffTracker
+from .spelling import KoreanSpellChecker
 
 
 class BulletinReviewer:
@@ -50,6 +51,10 @@ class BulletinReviewer:
             diff_issues, diff_summary = diff_tracker.track_diff()
             report.issues.extend(diff_issues)
             report.diff_summary = diff_summary
+
+        # 4. 일반 국어 맞춤법, 겹조사, 단어 중복 및 문장 부호 점검
+        spell_checker = KoreanSpellChecker(self.current)
+        report.issues.extend(spell_checker.check_all())
 
         return report
 
@@ -120,19 +125,32 @@ class BulletinReviewer:
                 for item in diff["removed"]:
                     lines.append(f"    - {item}")
 
-        # Section 4: 15대 고유 규칙 및 오류 점검
-        other_errors = [i for i in report.issues if i.level == IssueLevel.ERROR and not i.is_temporary_marker]
-        other_warnings = [i for i in report.issues if i.level == IssueLevel.WARNING and not i.is_temporary_marker]
+        # Section 4: 15대 고유 규칙 및 오류 점검 (맞춤법 제외)
+        rule_categories = {"고유규칙", "공간/층수", "일정/달력", "새교우", "주일명칭", "예전찬송", "생활실천다짐", "소식번호", "오늘일정누락", "예배위원", "주일봉사", "성서표기", "임시문구", "미완성항목"}
+        rule_errors = [i for i in report.issues if i.level == IssueLevel.ERROR and not i.is_temporary_marker and i.category in rule_categories]
+        rule_warnings = [i for i in report.issues if i.level == IssueLevel.WARNING and not i.is_temporary_marker and i.category in rule_categories]
 
         lines.append("")
         lines.append("🔍 4. 향린 15대 고유 규칙 및 오류 점검")
-        if not other_errors and not other_warnings:
+        if not rule_errors and not rule_warnings:
             lines.append("  ✅ 전화번호, 신도회 명칭, 층수, 요일 등 모든 규칙 통과!")
         else:
-            for err in other_errors:
+            for err in rule_errors:
                 lines.append(f"  ❌ [{err.location}] {err.title}: {err.message} (제안: {err.suggestion})")
-            for warn in other_warnings:
+            for warn in rule_warnings:
                 lines.append(f"  ⚠️ [{warn.location}] {warn.title}: {warn.message}")
+
+        # Section 5: 국어 맞춤법 및 문장 부호 점검
+        spelling_issues = [i for i in report.issues if i.category in ["국어맞춤법", "문장부호"]]
+        lines.append("")
+        lines.append("✍️ 5. 국어 맞춤법 및 문장 부호 점검")
+        if not spelling_issues:
+            lines.append("  ✅ 일반 맞춤법, 겹조사, 단어 중복, 괄호 짝 모두 정상!")
+        else:
+            for sp in spelling_issues:
+                icon = "❌" if sp.level == IssueLevel.ERROR else "⚠️"
+                sugg = f" (제안: {sp.suggestion})" if sp.suggestion else ""
+                lines.append(f"  {icon} [{sp.location}] {sp.title}: {sp.message}{sugg}")
 
         lines.append("")
         lines.append("-" * 72)
