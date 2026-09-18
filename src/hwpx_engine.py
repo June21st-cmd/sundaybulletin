@@ -483,13 +483,19 @@ class HwpxEngine:
                     else:
                         hymn_num = "254"
 
-                    if hymn_num in ["245", "246"] or "주기도" in confession:
-                        xml_text = xml_text.replace("신 앙 고 백 송", "주 기 도 송")
-                    else:
-                        xml_text = xml_text.replace("주 기 도 송", "신 앙 고 백 송")
+                    # 주기도송 / 신앙고백송 행만 정밀 타겟 치환 (타 찬송 및 결단찬송 오염 원천 차단)
+                    confession_row_pat = r'(<(?:\w+:)?tr\b(?:(?!</(?:\w+:)?tr>).)*?(?:신\s*앙\s*고\s*백\s*송|주\s*기\s*도\s*송)[\s\S]*?</(?:\w+:)?tr>)'
+                    def repl_confession_row(m):
+                        tr = m.group(0)
+                        if hymn_num in ["245", "246"] or "주기도" in confession:
+                            tr = re.sub(r"신\s*앙\s*고\s*백\s*송", "주 기 도 송", tr)
+                        else:
+                            tr = re.sub(r"주\s*기\s*도\s*송", "신 앙 고 백 송", tr)
+                        hymn_right_cell = f"국악찬송 {hymn_num}장"
+                        tr = re.sub(r"국악찬송\s*\d+장", hymn_right_cell, tr)
+                        return tr
 
-                    hymn_right_cell = f"국악찬송 {hymn_num}장"
-                    xml_text = re.sub(r"국악찬송\s*\d+장", hymn_right_cell, xml_text)
+                    xml_text = re.sub(confession_row_pat, repl_confession_row, xml_text)
 
                     # Dynamic lifestyle pledge substitution (향린교인 생활실천 다짐 10개 조항 순환)
                     pledge_info = data.get("lifestyle_pledge", {})
