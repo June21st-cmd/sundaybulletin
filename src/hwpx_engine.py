@@ -158,6 +158,18 @@ class HwpxEngine:
 
             choir_title = str(worship.get("choir_song_title", "")).strip()
             choir_info = str(worship.get("choir_song_info", "")).strip()
+            # Rule 33: 성가대 찬양 글·곡 정보 ALL CAPS 및 Mrs. 자동 정제
+            if choir_info:
+                choir_info = re.sub(r'\bMrs\.\s*', '', choir_info, flags=re.IGNORECASE)
+                def clean_caps(m):
+                    w = m.group(0)
+                    if len(w) > 1 and w.isupper():
+                        if '.' in w:
+                            return w
+                        return w.title()
+                    return w
+                choir_info = re.sub(r'[A-Za-z]+(?:\.[A-Za-z]+)*', clean_caps, choir_info)
+
             if choir_title:
                 if not (choir_title.startswith("“") or choir_title.startswith('"')):
                     formatted_title = f"“{choir_title}”"
