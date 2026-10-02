@@ -134,10 +134,10 @@ def validate_facts(bulletin_yaml_path, raw_input_path=None):
 
             # [C] 원고 텍스트 대비 임의 추가(환각) 감사
             if raw_text and title:
-                # 간단한 키워드 검사 (2글자 이상 핵심 명사)
                 clean_title = re.sub(r'[^가-힣a-zA-Z0-9]', '', title)
+                clean_raw_text = re.sub(r'[^가-힣a-zA-Z0-9]', '', raw_text)
                 # 중요한 모임명인데 원고에 전혀 언급이 없는 경우
-                if len(clean_title) >= 3 and clean_title not in raw_text:
+                if len(clean_title) >= 3 and clean_title not in clean_raw_text:
                     # 성서일과나 고정 광고는 제외
                     if not any(k in title for k in ["성서일과", "신학공부", "우리가락", "국악학교", "심방", "생활실천"]):
                         issues.append({

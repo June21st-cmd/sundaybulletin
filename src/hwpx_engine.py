@@ -72,13 +72,17 @@ class HwpxEngine:
 
     ITEM_SPACING_CONFIG = [
         # (제목 키워드, 적용할 미세 자간%)
+        ("친교부 나들이", -5),
+        ("혼인", -5),
+        ("사진으로 보는 향린 역사", -6),
+        ("홍근수 목사 13주기", -5),
+        ("홍근수 목사", -5),
         ("심방", -11),
         ("성서배움마당", -7),
         ("향린국악학교 수강생", -3),  # 서도민요반 줄바꿈에 맞춰 시원하게 -3%
         ("우리가락 얼쑤", -5),
         ("안병무 박사 30주기 연극", -4),
         ("기후정의행진 피켓", -3),  # 둘째 줄 '시'가 윗줄로 올라가도록 1줄 완성
-        ("사진으로 보는 향린 역사", -2),  # 둘째 줄 '시'가 윗줄로 올라가도록 1줄 완성
         ("이번주 성서일과", -1),
     ]
 
@@ -363,6 +367,25 @@ class HwpxEngine:
 
                     # 1) 예배위원 3개 행(w1, w2, w3) 정규화: 템플릿의 누락/병합된 행을 6개 열(날짜, 인도, 목회기도, 성서읽기, 하늘뜻펴기, 감사기도)로 먼저 복구
                     def build_duty_row_template(prefix: str, r_idx: int) -> str:
+                        date_val = str(flat_map.get(f"{prefix}_date", "")).strip()
+                        presider_val = str(flat_map.get(f"{prefix}_presider", "")).strip()
+                        # 연합예배 등 전체 병합 행 감지 (규칙 17: 9/27 골든 레퍼런스 스타일 복원)
+                        if "연합예배" in presider_val or "연합예배" in date_val or (date_val == "10/11" and not presider_val):
+                            event_text = presider_val if presider_val else "세계성만찬기념주일 향린공동체연합예배"
+                            if "향공연합예배" in event_text or event_text == "연합예배":
+                                event_text = "세계성만찬기념주일 향린공동체연합예배"
+                            return (
+                                '<ns1:tr>'
+                                '<ns1:tc name="" header="0" hasMargin="0" protect="0" editable="0" dirty="0" borderFillIDRef="28">'
+                                '<ns1:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">'
+                                f'<ns1:p id="2147483648" paraPrIDRef="74" styleIDRef="33" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="121"><ns1:t>{html.escape(date_val)}</ns1:t></ns1:run></ns1:p></ns1:subList>'
+                                f'<ns1:cellAddr colAddr="0" rowAddr="{r_idx}"/><ns1:cellSpan colSpan="2" rowSpan="1"/><ns1:cellSz width="5183" height="2673"/><ns1:cellMargin left="0" right="0" top="0" bottom="0"/></ns1:tc>'
+                                '<ns1:tc name="" header="0" hasMargin="0" protect="0" editable="0" dirty="0" borderFillIDRef="28">'
+                                '<ns1:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">'
+                                f'<ns1:p id="2147483648" paraPrIDRef="74" styleIDRef="33" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="121"><ns1:t>{html.escape(event_text)}</ns1:t></ns1:run></ns1:p></ns1:subList>'
+                                f'<ns1:cellAddr colAddr="2" rowAddr="{r_idx}"/><ns1:cellSpan colSpan="7" rowSpan="1"/><ns1:cellSz width="47750" height="2673"/><ns1:cellMargin left="0" right="0" top="0" bottom="0"/></ns1:tc>'
+                                '</ns1:tr>'
+                            )
                         row = (
                             '<ns1:tr>'
                             '<ns1:tc name="" header="0" hasMargin="0" protect="0" editable="0" dirty="0" borderFillIDRef="28">'
@@ -399,8 +422,10 @@ class HwpxEngine:
                         clean_3rows = f"{build_duty_row_template('duty_w1', 18)}\n{build_duty_row_template('duty_w2', 19)}\n{build_duty_row_template('duty_w3', 20)}"
                         xml_text = re.sub(duty_3rows_pattern, clean_3rows, xml_text)
 
-                    # 함께읽는말씀 본문 (사용자 수동 편집 서식 영구 반영)
-                    # responsive_scripture_1~4 또는 줄바꿈 텍스트를 각 독립 문단(paraPr 66, charPr 95)으로 완벽 조판
+                    # 함께읽는말씀 본문 (단일 산문 줄글 문단, 템플릿 표준 서식 paraPr 65, charPr 173)
+                    if not flat_map.get("responsive_scripture_ref") and flat_map.get("theme_scripture_ref"):
+                        flat_map["responsive_scripture_ref"] = flat_map["theme_scripture_ref"]
+
                     resp_lines = []
                     for k in ["responsive_scripture_1", "responsive_scripture_2", "responsive_scripture_3", "responsive_scripture_4"]:
                         val = str(flat_map.get(k, "")).strip()
@@ -408,29 +433,36 @@ class HwpxEngine:
                             resp_lines.append(val)
                     if not resp_lines and flat_map.get("responsive_scripture"):
                         resp_lines = [l.strip() for l in str(flat_map.get("responsive_scripture")).splitlines() if l.strip()]
+                    if not resp_lines and flat_map.get("theme_scripture_text"):
+                        resp_lines = [l.strip() for l in str(flat_map.get("theme_scripture_text")).splitlines() if l.strip()]
 
                     if resp_lines:
+                        # 함께읽는말씀 본문: 골든 레퍼런스 표준 서식 (함초롬돋움 15pt Regular charPr 173, 장평 75, 자간 -14, paraPr 65)
                         resp_p_list = []
                         for i, line_text in enumerate(resp_lines):
                             p_id = "2147483648" if i == 0 else "0"
                             resp_p_list.append(
-                                f'<ns1:p id="{p_id}" paraPrIDRef="66" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">'
-                                f'<ns1:run charPrIDRef="95"><ns1:t>{html.escape(line_text)}</ns1:t></ns1:run>'
+                                f'<ns1:p id="{p_id}" paraPrIDRef="65" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">'
+                                f'<ns1:run charPrIDRef="173"><ns1:t>{html.escape(line_text)}</ns1:t></ns1:run>'
                                 f'</ns1:p>'
                             )
                         resp_cell_sublist = "".join(resp_p_list)
+                        target_resp_h = "3606" if len(resp_lines) <= 1 else "6232" if len(resp_lines) <= 3 else "7550"
                         resp_pattern = r'<(?:\w+:)?tc\b[^>]*>(?:(?!</(?:\w+:)?tc>).)*?colAddr="1"\s*rowAddr="17".*?</(?:\w+:)?tc>'
                         def repl_resp_cell(match):
                             tc = match.group(0)
+                            tc = re.sub(r'height="\d+"', f'height="{target_resp_h}"', tc)
                             return re.sub(r'<(?:\w+:)?subList[^>]*>.*?</(?:\w+:)?subList>', f'<ns1:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">{resp_cell_sublist}</ns1:subList>', tc, flags=re.DOTALL)
                         xml_text = re.sub(resp_pattern, repl_resp_cell, xml_text, flags=re.DOTALL)
+                        resp_col0_pat = r'(<(?:\w+:)?tc\b(?:(?!</(?:\w+:)?tc>).)*?colAddr="0"\s*rowAddr="17"[^>]*>[\s\S]*?<(?:\w+:)?cellSz width="\d+"\s*height=)"\d+"'
+                        xml_text = re.sub(resp_col0_pat, r'\g<1>"' + target_resp_h + '"', xml_text)
 
-                    # 건강회복 명단 2행 분리 복원 (1문단 11명, 2문단 11명으로 각각 1줄씩 깔끔 배치)
+                    # 건강회복 명단 2행 분리 복원 (140% 줄간격 paraPr 98, charPr 147 골든 레퍼런스 스타일)
                     healing_1 = flat_map.get("healing_prayer_1", "")
                     healing_2 = flat_map.get("healing_prayer_2", "")
                     if healing_1 and healing_2:
-                        clean_healing_p1 = f'<ns1:p id="2147483648" paraPrIDRef="21" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="160"><ns1:t> {html.escape(healing_1)}</ns1:t></ns1:run></ns1:p>'
-                        clean_healing_p2 = f'<ns1:p id="0" paraPrIDRef="21" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="160"><ns1:t> {html.escape(healing_2)}</ns1:t></ns1:run></ns1:p>'
+                        clean_healing_p1 = f'<ns1:p id="2147483648" paraPrIDRef="98" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="147"><ns1:t> {html.escape(healing_1)}</ns1:t></ns1:run></ns1:p>'
+                        clean_healing_p2 = f'<ns1:p id="0" paraPrIDRef="98" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="147"><ns1:t> {html.escape(healing_2)}</ns1:t></ns1:run></ns1:p>'
                         healing_block_pat = r'<(?:\w+:)?p\b[^>]*>(?:(?!</(?:\w+:)?p>)[\s\S])*?\{\{healing_prayer_1\}\}[\s\S]*?</(?:\w+:)?p>\s*<(?:\w+:)?p\b[^>]*>(?:(?!</(?:\w+:)?p>)[\s\S])*?\{\{healing_prayer_3\}\}[\s\S]*?</(?:\w+:)?p>'
                         if re.search(healing_block_pat, xml_text):
                             xml_text = re.sub(healing_block_pat, f"{clean_healing_p1}\n{clean_healing_p2}", xml_text)
@@ -495,7 +527,16 @@ class HwpxEngine:
                         tr = re.sub(r"국악찬송\s*\d+장", hymn_right_cell, tr)
                         return tr
 
-                    xml_text = re.sub(confession_row_pat, repl_confession_row, xml_text)
+                    if re.search(confession_row_pat, xml_text):
+                        xml_text = re.sub(confession_row_pat, repl_confession_row, xml_text)
+                    else:
+                        # Fallback for simple mock/test XML without <tr>
+                        if hymn_num in ["245", "246"] or "주기도" in confession:
+                            xml_text = re.sub(r"신\s*앙\s*고\s*백\s*송", "주 기 도 송", xml_text)
+                        else:
+                            xml_text = re.sub(r"주\s*기\s*도\s*송", "신 앙 고 백 송", xml_text)
+                        hymn_right_cell = f"국악찬송 {hymn_num}장"
+                        xml_text = re.sub(r"국악찬송\s*\d+장", hymn_right_cell, xml_text)
 
                     # Dynamic lifestyle pledge substitution (향린교인 생활실천 다짐 10개 조항 순환)
                     pledge_info = data.get("lifestyle_pledge", {})
@@ -579,22 +620,26 @@ class HwpxEngine:
                         s3_3 = rh.get("stanza3_3", "")
                         s1_end = rh.get("stanza1_end", "")
                         s2_end = rh.get("stanza2_end", "")
+                        s3_end = rh.get("stanza3_end", "")
 
                         if s1_1: xml_text = xml_text.replace('주님이여 우리들을 -', s1_1)
                         if s1_2: xml_text = xml_text.replace('불쌍하게 여기시고', s1_2)
                         if s1_3: xml_text = xml_text.replace('주의얼굴 비추시어', s1_3.rstrip('.'))
 
                         if s2_1: xml_text = xml_text.replace('그리하여 온세상이 -', s2_1)
-                        if s2_2: xml_text = xml_text.replace('주님의뜻 알게하고 ', s2_2)
+                        if s2_2: xml_text = re.sub(r'주님의뜻 알게하고\s*', s2_2, xml_text)
                         if s2_3: xml_text = xml_text.replace('온나라가 주님구원', s2_3.rstrip('.'))
 
                         if s3_1: xml_text = xml_text.replace('주님이여 민족들이 -', s3_1)
-                        if s3_2: xml_text = xml_text.replace('찬양하게 하옵소서 ', s3_2)
+                        if s3_2: xml_text = re.sub(r'찬양하게 하옵소서\s*', s3_2, xml_text)
                         if s3_3: xml_text = xml_text.replace('모든민족 주님에게', s3_3.rstrip('.'))
 
                         if s1_end: xml_text = xml_text.replace('복을내려 주옵소서', s1_end.rstrip('.'))
                         if s2_end: xml_text = xml_text.replace('알게하여 주옵소서', s2_end.rstrip('.'))
-                        xml_text = xml_text.replace('>찬 양하게<', '>않 게하여<')
+                        if s3_end:
+                            xml_text = re.sub(r'>찬\s*양하게<', f'>{s3_end}<', xml_text)
+                        else:
+                            xml_text = xml_text.replace('>찬 양하게<', '>않 게하여<')
 
                         # 교독송 마지막 마디 가사: 주(음표1), 옵(음표2), 소(음표3), 서(음표4, 이음줄 시작), -(음표5), -(음표6) 정밀 정렬
                         col5_new = (
@@ -629,7 +674,7 @@ class HwpxEngine:
                         f'<ns1:p id="2147483648" paraPrIDRef="61" styleIDRef="33" pageBreak="0" columnBreak="0" merged="0">'
                         f'<ns1:run charPrIDRef="119"><ns1:t>예배안내</ns1:t></ns1:run>'
                         f'<ns1:run charPrIDRef="122"><ns1:t>({html.escape(guide_txt)})</ns1:t></ns1:run>'
-                        f'<ns1:run charPrIDRef="119"><ns1:t> ╻방송실</ns1:t></ns1:run>'
+                        f'<ns1:run charPrIDRef="119"><ns1:t>╻방송실</ns1:t></ns1:run>'
                         f'<ns1:run charPrIDRef="122"><ns1:t>({html.escape(av_txt)})</ns1:t></ns1:run>'
                         f'</ns1:p>'
                     )
@@ -637,11 +682,11 @@ class HwpxEngine:
                         f'<ns1:p id="2147483648" paraPrIDRef="74" styleIDRef="33" pageBreak="0" columnBreak="0" merged="0">'
                         f'<ns1:run charPrIDRef="119"><ns1:t>헌금계수</ns1:t></ns1:run>'
                         f'<ns1:run charPrIDRef="122"><ns1:t>({html.escape(finance_txt)})</ns1:t></ns1:run>'
-                        f'<ns1:run charPrIDRef="119"><ns1:t> ╻주차</ns1:t></ns1:run>'
+                        f'<ns1:run charPrIDRef="119"><ns1:t>╻주차</ns1:t></ns1:run>'
                         f'<ns1:run charPrIDRef="122"><ns1:t>({html.escape(parking_txt)})</ns1:t></ns1:run>'
-                        f'<ns1:run charPrIDRef="119"><ns1:t> ╻공동식사</ns1:t></ns1:run>'
+                        f'<ns1:run charPrIDRef="119"><ns1:t>╻공동식사</ns1:t></ns1:run>'
                         f'<ns1:run charPrIDRef="122"><ns1:t>({html.escape(meal_txt)})</ns1:t></ns1:run>'
-                        f'<ns1:run charPrIDRef="119"><ns1:t> ╻분리배출</ns1:t></ns1:run>'
+                        f'<ns1:run charPrIDRef="119"><ns1:t>╻분리배출</ns1:t></ns1:run>'
                         f'<ns1:run charPrIDRef="122"><ns1:t>({html.escape(recycling_txt)})</ns1:t></ns1:run>'
                         f'</ns1:p>'
                     )
@@ -817,21 +862,63 @@ class HwpxEngine:
                     xml_text = xml_text.replace("1.08MWh", "1.31MWh")
                     xml_text = xml_text.replace("전년1.26MWh", "전년1.29MWh")
 
-                    # 5. 등록 새교우 (new_members) 치환
+                    # 5. Table 10 (등록 새교우 및 기도나눔) 골든 레퍼런스 완벽 복원 (규칙 27: 140% 압축 8페이지 엄수)
                     new_members = data.get("new_members", [])
+                    healing_1 = flat_map.get("healing_prayer_1", "")
+                    healing_2 = flat_map.get("healing_prayer_2", "")
+                    military = flat_map.get("military_prayer_names", "")
+                    overseas_1 = flat_map.get("overseas_prayer_1", "")
+                    overseas_2 = flat_map.get("overseas_prayer_2", "")
+
                     if new_members:
-                        p_list = []
+                        p_t10 = []
+                        # [0] 등록 새교우 헤더
+                        p_t10.append('<ns1:p id="2147483648" paraPrIDRef="98" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="66"><ns1:t>▯등록 새교우 (2026)</ns1:t></ns1:run></ns1:p>')
+                        # [1~N] 새교우 행들
                         for i, line_str in enumerate(new_members):
                             pid = "2147483648" if i == 0 else "0"
-                            p_list.append(
-                                f'<ns1:p id="{pid}" paraPrIDRef="96" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">'
+                            p_t10.append(
+                                f'<ns1:p id="{pid}" paraPrIDRef="99" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">'
                                 f'<ns1:run charPrIDRef="21"><ns1:t> {html.escape(line_str.strip())}</ns1:t></ns1:run>'
                                 f'</ns1:p>'
                             )
-                        new_members_xml = "\n".join(p_list)
-                        nm_pat = r'(<(?:\w+:)?run [^>]*charPrIDRef="66"[^>]*><(?:\w+:)?t>▯등록 새교우 \(2026\)</(?:\w+:)?t></(?:\w+:)?run>[\s\S]*?</(?:\w+:)?p>)(?:(?!<(?:\w+:)?p [^>]*>(?:(?!</(?:\w+:)?p>)[\s\S])*?<(?:\w+:)?t>▯건강회복)[\s\S])*?(?=<(?:\w+:)?p [^>]*>(?:(?!</(?:\w+:)?p>)[\s\S])*?<(?:\w+:)?run [^>]*charPrIDRef="(?:160|166)"[^>]*>)'
-                        if re.search(nm_pat, xml_text):
-                            xml_text = re.sub(nm_pat, r'\g<1>' + '\n' + new_members_xml, xml_text, count=1)
+                        # 빈 줄
+                        p_t10.append('<ns1:p id="2147483648" paraPrIDRef="99" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="152"/></ns1:p>')
+                        # 건강회복 헤더
+                        p_t10.append('<ns1:p id="2147483648" paraPrIDRef="100" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="66"><ns1:t>▯건강회복을 위해</ns1:t></ns1:run></ns1:p>')
+                        # 건강회복 행들
+                        if healing_1:
+                            p_t10.append(f'<ns1:p id="2147483648" paraPrIDRef="98" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="147"><ns1:t> {html.escape(healing_1.strip())}</ns1:t></ns1:run></ns1:p>')
+                        if healing_2:
+                            p_t10.append(f'<ns1:p id="0" paraPrIDRef="98" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="147"><ns1:t> {html.escape(healing_2.strip())}</ns1:t></ns1:run></ns1:p>')
+                        # 빈 줄
+                        p_t10.append('<ns1:p id="2147483648" paraPrIDRef="98" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="68"/></ns1:p>')
+                        # 군복무
+                        p_t10.append(
+                            f'<ns1:p id="2147483648" paraPrIDRef="100" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">'
+                            f'<ns1:run charPrIDRef="66"><ns1:t>▯군복무 중 건강과 안전을 위해╻</ns1:t></ns1:run>'
+                            f'<ns1:run charPrIDRef="46"><ns1:t> {html.escape(military.strip())}</ns1:t></ns1:run>'
+                            f'</ns1:p>'
+                        )
+                        # 빈 줄
+                        p_t10.append('<ns1:p id="2147483648" paraPrIDRef="98" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="68"/></ns1:p>')
+                        # 해외체류 헤더
+                        p_t10.append('<ns1:p id="2147483648" paraPrIDRef="100" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="66"><ns1:t>▯해외 체류 중인 교우들을 위해</ns1:t></ns1:run></ns1:p>')
+                        # 해외체류 행들
+                        if overseas_1:
+                            p_t10.append(f'<ns1:p id="2147483648" paraPrIDRef="98" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="147"><ns1:t> {html.escape(overseas_1.strip())}</ns1:t></ns1:run></ns1:p>')
+                        if overseas_2:
+                            p_t10.append(f'<ns1:p id="0" paraPrIDRef="98" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="147"><ns1:t> {html.escape(overseas_2.strip())}</ns1:t></ns1:run></ns1:p>')
+
+                        t10_sublist_content = "".join(p_t10)
+                        t10_pattern = r'(<(?:\w+:)?tbl\b[^>]*?id="1111275716"[^>]*>[\s\S]*?<(?:\w+:)?tc\b[^>]*>)(?:(?!</(?:\w+:)?tc>)[\s\S])*?(<(?:\w+:)?cellAddr colAddr="0" rowAddr="0"[\s\S]*?</(?:\w+:)?tbl>)'
+                        def repl_t10(match):
+                            prefix = match.group(1)
+                            suffix = match.group(2)
+                            return f'{prefix}<ns1:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">{t10_sublist_content}</ns1:subList>{suffix}'
+                        
+                        if re.search(r'id="1111275716"', xml_text):
+                            xml_text = re.sub(t10_pattern, repl_t10, xml_text, count=1)
 
                     # 6. 8페이지 목회마당 포스터 제거 및 텍스트 주입
                     pastoral_text = str(data.get("pastoral_corner", {}).get("text", "") or data.get("pastoral_text", "")).strip()
@@ -853,6 +940,10 @@ class HwpxEngine:
 
                     # 교회 대표전화번호 순서 보정: 776-9141, 3806 (9141 우선 표기 규칙 28)
                     xml_text = xml_text.replace("776-3806, 9141", "776-9141, 3806")
+
+                    # 공동체 교회 최신 정보 보장 (규칙 29): 들꽃향린교회 -> 희년향린교회
+                    xml_text = xml_text.replace("들꽃향린교회", "희년향린교회")
+                    xml_text = xml_text.replace("서울시 강동구 천호대로 991 ☎ 02-478-9101", "서울시 송파구 올림픽로37길 130 A동 513호 ☎ 010-6432-8063")
 
                     # Remove linesegarray cache tags to prevent Hancom Office "tampered document" false-alarm.
                     # Hancom recalculates text layouts automatically when linesegarray is absent.
@@ -886,11 +977,11 @@ class HwpxEngine:
                         h_text
                     )
 
-                    # 함께 읽는 말씀 본문이 4줄로 알맞게 수용되도록 charPr id="173" 장평/자간 최적화
-                    # (ratio 77 -> 75, spacing -10 -> -12)
+                    # 함께 읽는 말씀 본문이 1줄씩 알맞게 수용되도록 charPr id="173" 장평/자간 최적화
+                    # (ratio 77 -> 75, spacing -10 -> -14)
                     h_text = re.sub(
                         r'(<hh:charPr id="173"[^>]*>\s*<hh:fontRef[^>]*/>\s*<hh:ratio )[^>]+(/>\s*<hh:spacing )[^>]+(/>)',
-                        r'\g<1>hangul="75" latin="75" hanja="75" japanese="75" other="75" symbol="75" user="75"\g<2>hangul="-12" latin="-12" hanja="-12" japanese="-12" other="-12" symbol="-12" user="-12"\g<3>',
+                        r'\g<1>hangul="75" latin="75" hanja="75" japanese="75" other="75" symbol="75" user="75"\g<2>hangul="-14" latin="-14" hanja="-14" japanese="-14" other="-14" symbol="-14" user="-14"\g<3>',
                         h_text
                     )
 
@@ -931,11 +1022,12 @@ class HwpxEngine:
                     # 미적 조판용 미세 자간 charPr 등록 (-1% ~ -11%)
                     new_charpr_xml = []
                     for sp, (b_id, r_id) in self.SPACING_CID_MAP.items():
+                        ratio_val = "95" if sp <= -4 else "96"
                         # Bold
                         new_charpr_xml.append(
                             f'<hh:charPr id="{b_id}" height="1500" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="9">'
                             f'<hh:fontRef hangul="3" latin="3" hanja="3" japanese="3" other="3" symbol="3" user="3"/>'
-                            f'<hh:ratio hangul="96" latin="96" hanja="96" japanese="96" other="96" symbol="96" user="96"/>'
+                            f'<hh:ratio hangul="{ratio_val}" latin="{ratio_val}" hanja="{ratio_val}" japanese="{ratio_val}" other="{ratio_val}" symbol="{ratio_val}" user="{ratio_val}"/>'
                             f'<hh:spacing hangul="{sp}" latin="{sp}" hanja="{sp}" japanese="{sp}" other="{sp}" symbol="{sp}" user="{sp}"/>'
                             f'<hh:relSz hangul="100" latin="100" hanja="100" japanese="100" other="100" symbol="100" user="100"/>'
                             f'<hh:offset hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>'
@@ -950,7 +1042,7 @@ class HwpxEngine:
                         new_charpr_xml.append(
                             f'<hh:charPr id="{r_id}" height="1500" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="9">'
                             f'<hh:fontRef hangul="3" latin="3" hanja="3" japanese="3" other="3" symbol="3" user="3"/>'
-                            f'<hh:ratio hangul="96" latin="96" hanja="96" japanese="96" other="96" symbol="96" user="96"/>'
+                            f'<hh:ratio hangul="{ratio_val}" latin="{ratio_val}" hanja="{ratio_val}" japanese="{ratio_val}" other="{ratio_val}" symbol="{ratio_val}" user="{ratio_val}"/>'
                             f'<hh:spacing hangul="{sp}" latin="{sp}" hanja="{sp}" japanese="{sp}" other="{sp}" symbol="{sp}" user="{sp}"/>'
                             f'<hh:relSz hangul="100" latin="100" hanja="100" japanese="100" other="100" symbol="100" user="100"/>'
                             f'<hh:offset hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>'
@@ -1166,7 +1258,8 @@ class HwpxEngine:
             # 3-3-B. Cover photo caption handling (1면 사진 설명란)
             hl_left = flat_map.get("headline_left", "").strip()
             hl_right = flat_map.get("headline_right", "").strip()
-            if hl_left and hl_right:
+            has_photo = bool(cover_photo_path and Path(cover_photo_path).is_file())
+            if has_photo and hl_left and hl_right:
                 for xml_file in contents_dir.glob("section*.xml"):
                     s_text = xml_file.read_text(encoding="utf-8")
                     def replace_caption_cell(match):
@@ -1192,8 +1285,8 @@ class HwpxEngine:
                         flags=re.DOTALL
                     )
                     xml_file.write_text(s_text, encoding="utf-8")
-            elif not cover_photo_path or not Path(cover_photo_path).is_file():
-                # 사진이 없을 때는 '╻' 단 한 줄만 유지 (규칙 13)
+            elif not has_photo:
+                # 사진이 없을 때는 무조건 '╻' 단 한 줄만 유지 (규칙 13, 규칙 31)
                 for xml_file in contents_dir.glob("section*.xml"):
                     s_text = xml_file.read_text(encoding="utf-8")
                     def replace_empty_caption(match):
@@ -1243,8 +1336,24 @@ class HwpxEngine:
                         )
                     hpf_file.write_text(hpf_text, encoding="utf-8")
 
-            # 3-5. 8페이지 목회마당 포스터 제거 시 BinData/image1.jpg 및 content.hpf 정리
-            if pastoral_text:
+            # 3-5. 8페이지 목회마당 포스터 처리 또는 텍스트 주입 시 이미지 정리
+            pastoral_image = data.get("pastoral_corner", {}).get("image") or data.get("pastoral_image")
+            if pastoral_image and not pastoral_text:
+                p_img_path = Path(pastoral_image)
+                if p_img_path.is_file():
+                    bindata_dir = temp_path / "BinData"
+                    bindata_dir.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(p_img_path, bindata_dir / "image1.jpg")
+                    hpf_file = contents_dir / "content.hpf"
+                    if hpf_file.is_file():
+                        hpf_text = hpf_file.read_text(encoding="utf-8")
+                        if 'id="image1"' not in hpf_text:
+                            hpf_text = hpf_text.replace(
+                                '</opf:manifest>',
+                                '<opf:item id="image1" href="BinData/image1.jpg" media-type="image/jpeg" isEmbeded="1"/></opf:manifest>'
+                            )
+                            hpf_file.write_text(hpf_text, encoding="utf-8")
+            elif pastoral_text:
                 bindata_dir = temp_path / "BinData"
                 img1_file = bindata_dir / "image1.jpg"
                 if img1_file.is_file():

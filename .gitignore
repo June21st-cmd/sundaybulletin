@@ -19,6 +19,7 @@ output/*
 !output/.gitkeep
 tmp/*
 !tmp/.gitkeep
+scratch/
 
 # Operating System & IDE
 .DS_Store
