@@ -138,8 +138,8 @@ def validate_facts(bulletin_yaml_path, raw_input_path=None):
                 clean_raw_text = re.sub(r'[^가-힣a-zA-Z0-9]', '', raw_text)
                 # 중요한 모임명인데 원고에 전혀 언급이 없는 경우
                 if len(clean_title) >= 3 and clean_title not in clean_raw_text:
-                    # 성서일과나 고정 광고는 제외
-                    if not any(k in title for k in ["성서일과", "신학공부", "우리가락", "국악학교", "심방", "생활실천"]):
+                    # 성서일과, 월례회, 고정 광고는 제외
+                    if not any(k in title for k in ["성서일과", "신학공부", "우리가락", "국악학교", "심방", "생활실천", "월례회"]):
                         issues.append({
                             "level": "WARNING",
                             "category": "원고 미언급 항목 (외부자료 임의 추가 의심)",
@@ -148,6 +148,39 @@ def validate_facts(bulletin_yaml_path, raw_input_path=None):
                             "content": content,
                             "message": f"'{title}'은(는) 사용자가 전달한 원고 텍스트에 없습니다. 외부 회의자료에서 임의로 추가된 것이 아닌지 반드시 확인하세요."
                         })
+
+    # [D] Rule 34: 매월 1주(부서 월례회), 2주(신도회 월례회) 필수 포함 검증
+    bulletin_date_str = str(data.get("metadata", {}).get("date_compact", "")) or str(data.get("date", "")) or yaml_file.stem
+    date_match = re.search(r'(\d{4})[-.]?(\d{2})[-.]?(\d{2})', bulletin_date_str)
+    if date_match:
+        day = int(date_match.group(3))
+        today_titles = [t for sec, t, c in all_items if "오늘 일정" in sec]
+        today_all_text = " ".join([f"{t} {c}" for sec, t, c in all_items if "오늘 일정" in sec])
+        
+        if day <= 7:
+            # 매월 첫째 주: 부서 월례회 필수
+            has_dept_meeting = any("부서" in t and "월례회" in t for t in today_titles) or ("부서" in today_all_text and "월례회" in today_all_text)
+            if not has_dept_meeting:
+                issues.append({
+                    "level": "ERROR",
+                    "category": "매월 1주 정례 모임 누락 (Rule 34)",
+                    "section": "1. 오늘 일정 안내",
+                    "item": "부서 월례회",
+                    "content": "",
+                    "message": "매월 첫째 주는 '부서 월례회: 공동식사 후, 각 부서 공간' 및 8개 부서 공간 안내 박스가 필수입니다! 원고 메모에 없더라도 절대 생략할 수 없습니다."
+                })
+        elif 8 <= day <= 14:
+            # 매월 둘째 주: 신도회 월례회 필수
+            has_fellowship_meeting = any("신도회" in t and "월례회" in t for t in today_titles) or ("신도회" in today_all_text and "월례회" in today_all_text)
+            if not has_fellowship_meeting:
+                issues.append({
+                    "level": "ERROR",
+                    "category": "매월 2주 정례 모임 누락 (Rule 34)",
+                    "section": "1. 오늘 일정 안내",
+                    "item": "신도회 월례회",
+                    "content": "",
+                    "message": "매월 둘째 주는 '신도회 월례회: 공동식사 후, 각 신도회 모임 공간' 및 9개 신도회 공간 안내 박스가 필수입니다! 원고 메모에 없더라도 절대 생략할 수 없습니다."
+                })
 
     return issues
 
