@@ -715,9 +715,32 @@ class HwpxEngine:
                     xml_text = re.sub(r"\{\{[^}]+\}\}", "", xml_text)
 
                     # 4. 공동관심사 (announcements_sections) 치환
-                    # 4. 공동관심사 (announcements_sections) 치환
                     ann_sections = data.get("announcements_sections", [])
                     if ann_sections:
+                        # Rule 34: 매월 1주(부서 월례회) 및 2주(신도회 월례회) 누락 시 자동 보정
+                        bulletin_date_str = str(data.get("metadata", {}).get("date_compact", "")) or str(data.get("date", ""))
+                        d_m = re.search(r"(\d{4})[-.]?(\d{2})[-.]?(\d{2})", bulletin_date_str)
+                        if d_m:
+                            b_day = int(d_m.group(3))
+                            today_sec = next((s for s in ann_sections if "오늘 일정" in s.get("title", "")), None)
+                            if today_sec is not None:
+                                items_list = today_sec.setdefault("items", [])
+                                item_titles = [it.get("title", "") if isinstance(it, dict) else str(it) for it in items_list]
+                                if b_day <= 7:
+                                    if not any("부서" in t and "월례회" in t for t in item_titles):
+                                        insert_idx = 1 if (items_list and "제직회" in str(items_list[0])) else 0
+                                        items_list.insert(insert_idx, {
+                                            "title": "부서 월례회",
+                                            "content": "공동식사 후, 각 부서 공간"
+                                        })
+                                elif 8 <= b_day <= 14:
+                                    if not any("신도회" in t and "월례회" in t for t in item_titles):
+                                        insert_idx = 1 if (items_list and "제직회" in str(items_list[0])) else 0
+                                        items_list.insert(insert_idx, {
+                                            "title": "신도회 월례회",
+                                            "content": "공동식사 후, 각 신도회 모임 공간"
+                                        })
+
                         def generate_announcements_xml(sections: list) -> str:
                             p_list = []
                             for sec in sections:
@@ -856,6 +879,32 @@ class HwpxEngine:
                                                 '</ns1:p>'
                                             )
                                             p_list.append(fellowship_box)
+
+                                        # 부서 월례회 항목 직후 부서 장소 안내 표(박스) 자동 삽입
+                                        if i_title == "부서 월례회":
+                                            dept_box = (
+                                                '<ns1:p id="2147483648" paraPrIDRef="109" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">'
+                                                '<ns1:run charPrIDRef="72"><ns1:t>  </ns1:t>'
+                                                '<ns1:tbl id="1185698824" zOrder="16" numberingType="TABLE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" pageBreak="CELL" repeatHeader="1" rowCnt="1" colCnt="1" cellSpacing="0" borderFillIDRef="4" noAdjust="0">'
+                                                '<ns1:sz width="50408" widthRelTo="ABSOLUTE" height="6852" heightRelTo="ABSOLUTE" protect="0" />'
+                                                '<ns1:pos treatAsChar="1" affectLSpacing="0" flowWithText="0" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0" />'
+                                                '<ns1:outMargin left="0" right="0" top="0" bottom="0" />'
+                                                '<ns1:inMargin left="510" right="510" top="141" bottom="141" />'
+                                                '<ns1:tr>'
+                                                '<ns1:tc name="" header="0" hasMargin="0" protect="0" editable="0" dirty="0" borderFillIDRef="4">'
+                                                '<ns1:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">'
+                                                '<ns1:p id="2147483648" paraPrIDRef="32" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="195"><ns1:t>관리부: 향우실(1층) ‖ 봉사부: 친교실(5층) ‖ 사회부: 세미나실(4층)</ns1:t></ns1:run></ns1:p>'
+                                                '<ns1:p id="2147483648" paraPrIDRef="32" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="195"><ns1:t>선교부: 도서관(3층) ‖ 성평등부: 담임목사실(4층) ‖ 예배부: 대예배실(2층)</ns1:t></ns1:run></ns1:p>'
+                                                '<ns1:p id="2147483648" paraPrIDRef="32" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="195"><ns1:t>친교부: 향우실(1층) ‖ 재정부: 상담실(4층)</ns1:t></ns1:run></ns1:p>'
+                                                '</ns1:subList>'
+                                                '<ns1:cellAddr colAddr="0" rowAddr="0" /><ns1:cellSpan colSpan="1" rowSpan="1" /><ns1:cellSz width="50408" height="6852" /><ns1:cellMargin left="510" right="510" top="141" bottom="141" />'
+                                                '</ns1:tc>'
+                                                '</ns1:tr>'
+                                                '</ns1:tbl>'
+                                                '<ns1:t /></ns1:run>'
+                                                '</ns1:p>'
+                                            )
+                                            p_list.append(dept_box)
 
                                 p_blank = '<ns1:p id="0" paraPrIDRef="95" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="125" /></ns1:p>'
                                 p_list.append(p_blank)
