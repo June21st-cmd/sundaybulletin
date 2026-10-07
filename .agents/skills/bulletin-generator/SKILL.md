@@ -87,7 +87,7 @@ description: 주간 주보 원고 데이터를 기반으로 HWPX 및 Typst 템�
      2. `input/bulletin_YYYYMMDD.yaml` 및 `data/assets/images/`에 해당 변경사항을 즉시 선행 역반영합니다.
      3. 사용자에게 어떤 수동 수정 내용이 감지되어 안전하게 계승되었는지 1줄로 브리핑한 후 다음 작업을 진행합니다.
 1. **원고 데이터 준비**: `data/inputs/bulletin_YYYYMMDD.yaml` 작성 또는 AI 정제.
-   - 성경 본문 쪽수가 없으면 과거 주보를 대조하여 사용자에게 사전 예상 쪽수를 브리핑하고 확인받아 기입.
+   - 성경 본문 쪽수가 없으면 임의로 계산하거나 추정하지 말고 빈칸으로 두어 검증기가 WARN을 발생시키도록 합니다.
 2. **생성 명령 실행**:
    ```bash
    python3 src/main.py --data data/inputs/bulletin_YYYYMMDD.yaml --engine all --output output/

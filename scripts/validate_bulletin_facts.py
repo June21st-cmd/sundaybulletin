@@ -99,14 +99,25 @@ def validate_facts(bulletin_yaml_path, raw_input_path=None):
                             "message": f"'{title}'의 시간이 표준({exp_time})과 다릅니다! {rule['warning']}"
                         })
                     if exp_place not in content:
-                        issues.append({
-                            "level": "WARNING",
-                            "category": "정례 모임 장소 누락/불일치",
-                            "section": sec_title,
-                            "item": title,
-                            "content": content,
-                            "message": f"'{title}'에 표준 장소({exp_place})가 명시되지 않았거나 다릅니다."
-                        })
+                        place_match = re.search(r'([가-힣]+실\([0-9]+층\)|\([0-9]+층\)|[가-힣]+실)', content)
+                        if place_match:
+                            issues.append({
+                                "level": "ERROR",
+                                "category": "정례 모임 장소 불일치",
+                                "section": sec_title,
+                                "item": title,
+                                "content": content,
+                                "message": f"'{title}'의 장소({place_match.group(0)})가 표준 장소({exp_place})와 다릅니다!"
+                            })
+                        else:
+                            issues.append({
+                                "level": "WARNING",
+                                "category": "정례 모임 장소 누락",
+                                "section": sec_title,
+                                "item": title,
+                                "content": content,
+                                "message": f"'{title}'에 표준 장소({exp_place})가 명시되지 않았습니다."
+                            })
 
             # [B] 인접 항목 복붙 오염 검증
             # 시간 추출 (HH:MM)

@@ -409,7 +409,7 @@ class BulletinRuleChecker:
                 location="4면 성서읽기",
                 title="성경 본문 쪽수 미정",
                 message=f"성경 본문({scripture})에 쪽수(예: 000쪽)가 표기되지 않았습니다.",
-                suggestion="과거 주보 기준 예상 쪽수 확인 필요",
+                suggestion="성경책을 직접 확인하여 쪽수를 기입해야 합니다.",
                 is_temporary_marker=True
             ))
 
