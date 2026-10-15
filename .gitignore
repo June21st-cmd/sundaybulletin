@@ -36,3 +36,14 @@ desktop.ini
 
 # Typst output caches if any
 *.pdf.tmp
+
+# Build & packaging
+*.egg-info/
+build/
+dist/
+
+# Local input data & PII protection (Security Rule 2)
+data/inputs/*
+!data/inputs/.gitkeep
+input/*
+!input/.gitkeep

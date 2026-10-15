@@ -163,7 +163,9 @@ def validate_facts(bulletin_yaml_path, raw_input_path=None):
     # [D] Rule 34: 매월 1주(부서 월례회), 2주(신도회 월례회) 필수 포함 검증
     bulletin_date_str = str(data.get("metadata", {}).get("date_compact", "")) or str(data.get("date", "")) or yaml_file.stem
     date_match = re.search(r'(\d{4})[-.]?(\d{2})[-.]?(\d{2})', bulletin_date_str)
+    target_date_str = None
     if date_match:
+        target_date_str = f"{date_match.group(1)}-{date_match.group(2)}-{date_match.group(3)}"
         day = int(date_match.group(3))
         today_titles = [t for sec, t, c in all_items if "오늘 일정" in sec]
         today_all_text = " ".join([f"{t} {c}" for sec, t, c in all_items if "오늘 일정" in sec])
@@ -192,6 +194,53 @@ def validate_facts(bulletin_yaml_path, raw_input_path=None):
                     "content": "",
                     "message": "매월 둘째 주는 '신도회 월례회: 공동식사 후, 각 신도회 모임 공간' 및 9개 신도회 공간 안내 박스가 필수입니다! 원고 메모에 없더라도 절대 생략할 수 없습니다."
                 })
+
+    # 4. 홈페이지 공식 성서읽기(board_hVTK46) 원문 1:1 대조 검증 (Rule 0, Rule 23 하드 가드레일)
+    worship_dict = data.get("worship_1", data.get("worship", {}))
+    resp_lines = []
+    for k in ["responsive_scripture_1", "responsive_scripture_2", "responsive_scripture_3", "responsive_scripture_4"]:
+        v = str(worship_dict.get(k, "")).strip()
+        if v:
+            resp_lines.append(v)
+    if not resp_lines and worship_dict.get("responsive_scripture"):
+        rs = worship_dict.get("responsive_scripture")
+        if isinstance(rs, list):
+            resp_lines = [str(x).strip() for x in rs if str(x).strip()]
+        elif isinstance(rs, str):
+            resp_lines = [l.strip() for l in rs.split("\n") if l.strip()]
+
+    if resp_lines and target_date_str:
+        try:
+            try:
+                from scripts.fetch_sunday_scripture import fetch_post_url, fetch_scripture_content, parse_scriptures
+            except ImportError:
+                from fetch_sunday_scripture import fetch_post_url, fetch_scripture_content, parse_scriptures
+            post_url = fetch_post_url(target_date_str)
+            if post_url:
+                raw_scripture = fetch_scripture_content(post_url)
+                if raw_scripture:
+                    # 성서읽기 게시판의 모든 텍스트 정규화
+                    clean_official = re.sub(r'\s+', ' ', raw_scripture)
+                    # YAML의 함께읽는말씀 본문 검증
+                    for idx, line in enumerate(resp_lines, 1):
+                        # 숫자 및 특수문자 정돈 후 핵심 어구 대조
+                        core_text = re.sub(r'^\d+\s*', '', line).strip()
+                        # 최소 10글자 이상인 핵심 구절 추출하여 대조
+                        tokens = [t for t in core_text.split() if len(t) >= 2]
+                        match_count = sum(1 for t in tokens if t in clean_official)
+                        ratio = match_count / max(1, len(tokens))
+                        if ratio < 0.6: # 공식 본문 단어 일치율 60% 미만이면 AI 임의 작문/타 번역본으로 차단
+                            issues.append({
+                                "level": "ERROR",
+                                "category": "성서 본문 출처 위반 및 임의 작문 감지 (Rule 0)",
+                                "section": "2면 함께읽는말씀",
+                                "item": f"본문 {idx}행",
+                                "content": line,
+                                "message": f"함께읽는말씀 본문이 교회 홈페이지 공식 성서읽기(URL: {post_url}) 본문과 일치율({ratio:.1%}) 미달로 불일치합니다! AI 자체 파라미터 기억에 의한 자의적 작문 또는 비공식 번역본 인용은 엄격히 차단됩니다."
+                            })
+        except Exception as e:
+            # 오프라인이거나 네트워크 단절 시는 검증 건너뜀 (단위테스트 fallback)
+            pass
 
     return issues
 

@@ -119,6 +119,7 @@ class TestHwpxEngine(unittest.TestCase):
         data_path = Path("data/inputs/bulletin_20260913.yaml")
         if template_path.is_file() and data_path.is_file():
             data = load_bulletin_data(data_path)
+            data.setdefault("metadata", {})["skip_scripture_verification"] = True
             engine = HwpxEngine(template_path)
             with tempfile.TemporaryDirectory() as temp_dir:
                 out_path = Path(temp_dir) / "test_qr.hwpx"

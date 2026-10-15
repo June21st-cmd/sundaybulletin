@@ -15,8 +15,6 @@ import re
 import urllib.request
 from datetime import datetime, timedelta
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-
 BASE_URL = "https://www.hyanglin.org/board_hVTK46"
 
 def get_sunday_date(arg_date=None):

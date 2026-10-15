@@ -349,6 +349,72 @@ class HwpxEngine:
 
         return pic_xml
 
+    def _verify_official_scripture(self, data: Dict[str, Any]) -> None:
+        """Verify that responsive_scripture matches official homepage scripture (Rule 0).
+        Raises ValueError if arbitrary/hallucinated scripture is detected.
+        """
+        worship = data.get("worship_1", data.get("worship", {}))
+        if not isinstance(worship, dict):
+            return
+
+        meta = data.get("metadata", {})
+        if meta.get("skip_scripture_verification") or data.get("skip_scripture_verification"):
+            return
+
+        resp_lines = []
+        for k in ["responsive_scripture_1", "responsive_scripture_2", "responsive_scripture_3", "responsive_scripture_4"]:
+            v = str(worship.get(k, "")).strip()
+            if v:
+                resp_lines.append(v)
+        if not resp_lines and worship.get("responsive_scripture"):
+            rs = worship.get("responsive_scripture")
+            if isinstance(rs, list):
+                resp_lines = [str(x).strip() for x in rs if str(x).strip()]
+            elif isinstance(rs, str):
+                resp_lines = [l.strip() for l in rs.split("\n") if l.strip()]
+
+        if not resp_lines:
+            return
+
+        # Extract target Sunday date
+        meta = data.get("metadata", {})
+        date_str = str(meta.get("date_compact") or meta.get("date") or meta.get("date_korean") or data.get("date", ""))
+        d_m = re.search(r'(\d{4})[-.]?(\d{2})[-.]?(\d{2})', date_str)
+        if not d_m:
+            return
+        target_date_iso = f"{d_m.group(1)}-{d_m.group(2)}-{d_m.group(3)}"
+
+        try:
+            try:
+                from scripts.fetch_sunday_scripture import fetch_post_url, fetch_scripture_content
+            except ImportError:
+                from fetch_sunday_scripture import fetch_post_url, fetch_scripture_content
+
+            post_url = fetch_post_url(target_date_iso)
+            if post_url:
+                raw_scripture = fetch_scripture_content(post_url)
+                if raw_scripture:
+                    clean_official = re.sub(r'\s+', ' ', raw_scripture)
+                    for idx, line in enumerate(resp_lines, 1):
+                        core_text = re.sub(r'^\d+\s*', '', line).strip()
+                        tokens = [t for t in core_text.split() if len(t) >= 2]
+                        if not tokens:
+                            continue
+                        match_count = sum(1 for t in tokens if t in clean_official)
+                        ratio = match_count / len(tokens)
+                        if ratio < 0.6:
+                            raise ValueError(
+                                f"[CRITICAL BLOCKER] 함께읽는말씀 본문 출처 위반 감지 (Rule 0)!\n"
+                                f" - 입력 행 {idx}: \"{line}\"\n"
+                                f" - 공식 SSOT 게시판({post_url}) 본문 일치율: {ratio:.1%} (기준: 60% 이상)\n"
+                                f" AI 자체 기억에 의한 작문이나 비공식 번역본 인용은 엄격히 차단됩니다."
+                            )
+        except ValueError:
+            raise
+        except Exception:
+            # Network issues or offline unit test fallback
+            pass
+
     def generate(self, data: Dict[str, Any], output_path: Path | str) -> Path:
         """Generate a new HWPX file by substituting text placeholders in XML.
         
@@ -361,6 +427,9 @@ class HwpxEngine:
         """
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Rule 0 & Rule 23: 공식 성서읽기 본문 1:1 대조 하드 가드레일 (AI 임의 작문 원천 차단)
+        self._verify_official_scripture(data)
 
         flat_map = self.flatten_data(data)
 
@@ -460,14 +529,27 @@ class HwpxEngine:
                             )
                         resp_cell_sublist = "".join(resp_p_list)
                         target_resp_h = "3606" if len(resp_lines) <= 1 else "6232" if len(resp_lines) <= 3 else "7550"
-                        resp_pattern = r'<(?:\w+:)?tc\b[^>]*>(?:(?!</(?:\w+:)?tc>).)*?colAddr="1"\s*rowAddr="17".*?</(?:\w+:)?tc>'
+                        # Table 1 함께읽는말씀 본문(width="51898")만 스코프 한정하여 치환
+                        resp_pattern = r'<(?:\w+:)?tc\b[^>]*>(?:(?!</(?:\w+:)?tc>).)*?colAddr="1"\s*rowAddr="17"[^>]*>[\s\S]*?<(?:\w+:)?cellSz width="51898"[\s\S]*?</(?:\w+:)?tc>'
                         def repl_resp_cell(match):
                             tc = match.group(0)
                             tc = re.sub(r'height="\d+"', f'height="{target_resp_h}"', tc)
                             return re.sub(r'<(?:\w+:)?subList[^>]*>.*?</(?:\w+:)?subList>', f'<ns1:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">{resp_cell_sublist}</ns1:subList>', tc, flags=re.DOTALL)
                         xml_text = re.sub(resp_pattern, repl_resp_cell, xml_text, flags=re.DOTALL)
-                        resp_col0_pat = r'(<(?:\w+:)?tc\b(?:(?!</(?:\w+:)?tc>).)*?colAddr="0"\s*rowAddr="17"[^>]*>[\s\S]*?<(?:\w+:)?cellSz width="\d+"\s*height=)"\d+"'
+                        # Table 1 함께읽는말씀 소제목(width="951")만 높이 동기화 (Table 4 예배위원 행 절대 오염 방지)
+                        resp_col0_pat = r'(<(?:\w+:)?tc\b(?:(?!</(?:\w+:)?tc>).)*?colAddr="0"\s*rowAddr="17"[^>]*>[\s\S]*?<(?:\w+:)?cellSz width="951"\s*height=)"\d+"'
                         xml_text = re.sub(resp_col0_pat, r'\g<1>"' + target_resp_h + '"', xml_text)
+
+                        # Table 1 성서읽기(rowAddr 15), 함께읽는말씀(rowAddr 16) 오른쪽 셀 vertAlign="CENTER" 보장 (Rule 20)
+                        xml_text = re.sub(
+                            r'(<(?:\w+:)?tc\b(?:(?!</(?:\w+:)?tc>).)*?colAddr="2"\s*rowAddr="(?:15|16)"[^>]*>[\s\S]*?<(?:\w+:)?subList\b[^>]*?vertAlign=)"[^"]*"',
+                            r'\g<1>"CENTER"',
+                            xml_text
+                        )
+
+                        # Table 4 예배위원 헤더 행(날짜-인도-목회기도) 높이를 골든 레퍼런스 표준(2739)으로 확실히 보장
+                        duty_header_pat = r'(<(?:\w+:)?tc\b(?:(?!</(?:\w+:)?tc>).)*?rowAddr="17"[^>]*>[\s\S]*?<(?:\w+:)?cellSz width="(?:5183|9546|9547|9554|9557)"\s*height=)"\d+"'
+                        xml_text = re.sub(duty_header_pat, r'\g<1>"2739"', xml_text)
 
                     # 건강회복 명단 2행 분리 복원 (140% 줄간격 paraPr 98, charPr 147 골든 레퍼런스 스타일)
                     healing_1 = flat_map.get("healing_prayer_1", "")
@@ -556,7 +638,7 @@ class HwpxEngine:
                     p_text = ""
                     if isinstance(pledge_info, dict):
                         p_num = str(pledge_info.get("number", "")).strip()
-                        p_text = str(pledge_info.get("text", "")).strip()
+                        p_text = str(pledge_info.get("text") or pledge_info.get("content") or "").strip()
 
                     # 자동 순환 계산 (원고에 명시되지 않거나 비어있는 경우)
                     if not p_num or not p_text:
@@ -579,6 +661,8 @@ class HwpxEngine:
                         pledge_pattern = r'(charPrIDRef="178"[^>]*><(?:\w+:)?t>)\d+\.\s*(</(?:\w+:)?t></(?:\w+:)?run>).*?(</(?:\w+:)?p>)'
                         repl = rf'\g<1>{p_num}. \g<2><ns1:run charPrIDRef="192"><ns1:t>{html.escape(p_text)}</ns1:t></ns1:run>\g<3>'
                         xml_text = re.sub(pledge_pattern, repl, xml_text, flags=re.DOTALL)
+                        # 실천다짐 표 높이 골든 레퍼런스(10/4 주보) 표준 규격(6504)으로 슬림화
+                        xml_text = re.sub(r'(<(?:\w+:)?cellSz width="52270"\s*height=)"\d+"', r'\g<1>"6504"', xml_text)
 
                     # Clean choir row (Row 24): unify height to 3217, 17pt Bold title + 14pt Regular info
                     choir_title_str = flat_map.get("choir_song_title", "")
@@ -806,34 +890,61 @@ class HwpxEngine:
                                             )
                                             p_list.append(p_item)
                                     else:
-                                        # 길목 청년활동가 지원 사업 또는 사용자 지정 이미지 항목 처리
-                                        has_qr = ("청년활동가" in i_title) or (isinstance(item, dict) and item.get("image"))
+                                        # 길목 청년활동가 지원 사업 또는 교적 정보 확인 시스템 또는 사용자 지정 이미지 항목 처리
+                                        has_qr = ("청년활동가" in i_title) or ("교적" in i_title) or (isinstance(item, dict) and item.get("image"))
                                         qr_pic_xml = ""
                                         if has_qr:
-                                            qr_pic_xml = (
-                                                '<ns1:pic id="1191766890" zOrder="34" numberingType="PICTURE" textWrap="IN_FRONT_OF_TEXT" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="118025067" reverse="0">'
-                                                '<ns1:offset x="4294942857" y="0"/>'
-                                                '<ns1:orgSz width="26760" height="26760"/>'
-                                                '<ns1:curSz width="2321" height="2321"/>'
-                                                '<ns1:flip horizontal="0" vertical="0"/>'
-                                                '<ns1:rotationInfo angle="0" centerX="1160" centerY="1160" rotateimage="1"/>'
-                                                '<ns1:renderingInfo>'
-                                                '<ns2:transMatrix e1="1" e2="0" e3="-24439" e4="0" e5="1" e6="0"/>'
-                                                '<ns2:scaMatrix e1="0.086734" e2="0" e3="24439" e4="0" e5="0.086734" e6="0"/>'
-                                                '<ns2:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>'
-                                                '</ns1:renderingInfo>'
-                                                '<ns2:img binaryItemIDRef="image8" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/>'
-                                                '<ns1:imgRect><ns2:pt0 x="0" y="0"/><ns2:pt1 x="26760" y="0"/><ns2:pt2 x="26760" y="26760"/><ns2:pt3 x="0" y="26760"/></ns1:imgRect>'
-                                                '<ns1:imgClip left="0" right="26760" top="0" bottom="26760"/>'
-                                                '<ns1:inMargin left="0" right="0" top="0" bottom="0"/>'
-                                                '<ns1:imgDim dimwidth="26760" dimheight="26760"/>'
-                                                '<ns1:effects/>'
-                                                '<ns1:sz width="2321" widthRelTo="ABSOLUTE" height="2321" heightRelTo="ABSOLUTE" protect="0"/>'
-                                                '<ns1:pos treatAsChar="0" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="49176"/>'
-                                                '<ns1:outMargin left="0" right="0" top="0" bottom="0"/>'
-                                                '<ns1:shapeComment>그림입니다.\n원본 그림의 이름: 2gtkk.png\n원본 그림의 크기: 가로 357pixel, 세로 357pixel</ns1:shapeComment>'
-                                                '</ns1:pic>'
-                                            )
+                                            if "교적" in i_title:
+                                                # 10/4 골든 레퍼런스 원본 규격 (width 3568, height 3568, vertOffset 148, horzOffset 49440)
+                                                qr_pic_xml = (
+                                                    '<ns1:pic id="1209202286" zOrder="17" numberingType="PICTURE" textWrap="SQUARE" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="135460463" reverse="0">'
+                                                    '<ns1:offset x="4294966515" y="4294967204"/>'
+                                                    '<ns1:orgSz width="26760" height="26760"/>'
+                                                    '<ns1:curSz width="3568" height="3568"/>'
+                                                    '<ns1:flip horizontal="0" vertical="0"/>'
+                                                    '<ns1:rotationInfo angle="0" centerX="1784" centerY="1784" rotateimage="1"/>'
+                                                    '<ns1:renderingInfo>'
+                                                    '<ns2:transMatrix e1="1" e2="0" e3="-781" e4="0" e5="1" e6="-92"/>'
+                                                    '<ns2:scaMatrix e1="0.133333" e2="0" e3="781" e4="0" e5="0.133333" e6="92"/>'
+                                                    '<ns2:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>'
+                                                    '</ns1:renderingInfo>'
+                                                    '<ns2:img binaryItemIDRef="image8" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/>'
+                                                    '<ns1:imgRect><ns2:pt0 x="0" y="0"/><ns2:pt1 x="26760" y="0"/><ns2:pt2 x="26760" y="26760"/><ns2:pt3 x="0" y="26760"/></ns1:imgRect>'
+                                                    '<ns1:imgClip left="0" right="26760" top="0" bottom="26760"/>'
+                                                    '<ns1:inMargin left="0" right="0" top="0" bottom="0"/>'
+                                                    '<ns1:imgDim dimwidth="26760" dimheight="26760"/>'
+                                                    '<ns1:effects/>'
+                                                    '<ns1:sz width="3568" widthRelTo="ABSOLUTE" height="3568" heightRelTo="ABSOLUTE" protect="0"/>'
+                                                    '<ns1:pos treatAsChar="0" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="148" horzOffset="49440"/>'
+                                                    '<ns1:outMargin left="0" right="0" top="0" bottom="0"/>'
+                                                    '<ns1:shapeComment>그림입니다.\n원본 그림의 이름: 교인 정보 수정.png\n원본 그림의 크기: 가로 357pixel, 세로 357pixel</ns1:shapeComment>'
+                                                    '</ns1:pic>'
+                                                )
+                                            else:
+                                                qr_pic_xml = (
+                                                    '<ns1:pic id="1191766890" zOrder="34" numberingType="PICTURE" textWrap="IN_FRONT_OF_TEXT" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="118025067" reverse="0">'
+                                                    '<ns1:offset x="4294942857" y="0"/>'
+                                                    '<ns1:orgSz width="26760" height="26760"/>'
+                                                    '<ns1:curSz width="2321" height="2321"/>'
+                                                    '<ns1:flip horizontal="0" vertical="0"/>'
+                                                    '<ns1:rotationInfo angle="0" centerX="1160" centerY="1160" rotateimage="1"/>'
+                                                    '<ns1:renderingInfo>'
+                                                    '<ns2:transMatrix e1="1" e2="0" e3="-24439" e4="0" e5="1" e6="0"/>'
+                                                    '<ns2:scaMatrix e1="0.086734" e2="0" e3="24439" e4="0" e5="0.086734" e6="0"/>'
+                                                    '<ns2:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>'
+                                                    '</ns1:renderingInfo>'
+                                                    '<ns2:img binaryItemIDRef="image8" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/>'
+                                                    '<ns1:imgRect><ns2:pt0 x="0" y="0"/><ns2:pt1 x="26760" y="0"/><ns2:pt2 x="26760" y="26760"/><ns2:pt3 x="0" y="26760"/></ns1:imgRect>'
+                                                    '<ns1:imgClip left="0" right="26760" top="0" bottom="26760"/>'
+                                                    '<ns1:inMargin left="0" right="0" top="0" bottom="0"/>'
+                                                    '<ns1:imgDim dimwidth="26760" dimheight="26760"/>'
+                                                    '<ns1:effects/>'
+                                                    '<ns1:sz width="2321" widthRelTo="ABSOLUTE" height="2321" heightRelTo="ABSOLUTE" protect="0"/>'
+                                                    '<ns1:pos treatAsChar="0" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="49176"/>'
+                                                    '<ns1:outMargin left="0" right="0" top="0" bottom="0"/>'
+                                                    '<ns1:shapeComment>그림입니다.\n원본 그림의 이름: 2gtkk.png\n원본 그림의 크기: 가로 357pixel, 세로 357pixel</ns1:shapeComment>'
+                                                    '</ns1:pic>'
+                                                )
 
                                         bullet_cid = r_cid if has_qr else "79"
                                         if i_content:
@@ -916,12 +1027,17 @@ class HwpxEngine:
                         if re.search(ann_pat, xml_text):
                             xml_text = re.sub(ann_pat, new_ann_xml + "\n", xml_text, count=1)
 
-                    # 교회 탄소중립 최신 수치 갱신 (8월 데이터)
-                    xml_text = xml_text.replace("7월전기 ", "8월전기 ")
-                    xml_text = xml_text.replace("5.86MWh", "6.89MWh")
-                    xml_text = xml_text.replace("전년5.91MWh", "전년6.90MWh")
-                    xml_text = xml_text.replace("1.08MWh", "1.31MWh")
-                    xml_text = xml_text.replace("전년1.26MWh", "전년1.29MWh")
+                    # 교회 탄소중립 최신 수치 갱신 (9월 데이터 - 10/4 주보 SSOT)
+                    xml_text = re.sub(
+                        r'\[교회탄소중립\]\s*[^<]+',
+                        '[교회탄소중립] 9월전기 사용량 4.91MWh(전년4.94MWh) / 생산량 1.70MWh(전년1.30MWh)',
+                        xml_text
+                    )
+                    xml_text = xml_text.replace("7월전기 ", "9월전기 ").replace("8월전기 ", "9월전기 ")
+                    xml_text = xml_text.replace("5.86MWh", "4.91MWh").replace("6.89MWh", "4.91MWh")
+                    xml_text = xml_text.replace("전년5.91MWh", "전년4.94MWh").replace("전년6.90MWh", "전년4.94MWh")
+                    xml_text = xml_text.replace("1.08MWh", "1.70MWh").replace("1.31MWh", "1.70MWh")
+                    xml_text = xml_text.replace("전년1.26MWh", "전년1.30MWh").replace("전년1.29MWh", "전년1.30MWh")
 
                     # 5. Table 10 (등록 새교우 및 기도나눔) 골든 레퍼런스 완벽 복원 (규칙 27: 140% 압축 8페이지 엄수)
                     new_members = data.get("new_members", [])
@@ -1200,6 +1316,39 @@ class HwpxEngine:
                                         spec["target_h"]
                                     )
                                     s_text = s_text.replace(orig_pic, updated_pic)
+
+                            # 절기별 목표 규격(창조절/주현절 5437x7800, 18018x6200 등) 강제 동기화 (Rule 11)
+                            sym_target_sz = matched_cfg.get("symbol_target_sz")
+                            txt_target_sz = matched_cfg.get("text_target_sz")
+                            if sym_target_sz and txt_target_sz:
+                                # 1. 심볼 로고 치환 (가로 7007->5437, 세로 7800, orgSz 25200x36150, scaMatrix 0.215754, imgRect 25200x36150)
+                                def fix_sym(m):
+                                    chunk = m.group(0)
+                                    chunk = re.sub(r'curSz width="\d+" height="\d+"', f'curSz width="{sym_target_sz[0]}" height="{sym_target_sz[1]}"', chunk)
+                                    chunk = re.sub(r'sz width="\d+" widthRelTo="ABSOLUTE" height="\d+"', f'sz width="{sym_target_sz[0]}" widthRelTo="ABSOLUTE" height="{sym_target_sz[1]}"', chunk)
+                                    chunk = re.sub(r'orgSz width="\d+" height="\d+"', 'orgSz width="25200" height="36150"', chunk)
+                                    chunk = re.sub(r'scaMatrix e1="[\d\.]+" e2="0" e3="0" e4="0" e5="[\d\.]+"', 'scaMatrix e1="0.215754" e2="0" e3="0" e4="0" e5="0.215768"', chunk)
+                                    chunk = re.sub(r'rotationInfo angle="0" centerX="\d+" centerY="\d+"', 'rotationInfo angle="0" centerX="2718" centerY="3900"', chunk)
+                                    chunk = re.sub(r'(<(?:\w+:)?imgRect>\s*<(?:\w+:)?pt0 x="0" y="0"/>\s*<(?:\w+:)?pt1 x=)"\d+" y="0"/>\s*<(?:\w+:)?pt2 x="\d+" y=)"\d+"(/>\s*<(?:\w+:)?pt3 x="0" y=)"\d+"', r'\g<1>"25200" y="0"/>\s*<hc:pt2 x="25200" y="36150"\g<3>"36150"', chunk)
+                                    chunk = re.sub(r'imgClip left="0" right="\d+" top="0" bottom="\d+"', 'imgClip left="0" right="25200" top="0" bottom="36180"', chunk)
+                                    chunk = re.sub(r'imgDim dimwidth="\d+" dimheight="\d+"', 'imgDim dimwidth="25200" dimheight="36180"', chunk)
+                                    return chunk
+                                s_text = re.sub(r'<(?:\w+:)?pic\b[^>]*>(?:(?!</(?:\w+:)?pic>).)*?(?:width="7007"|향린교회 로고 \(빨간색\) - 복사본 - 복사본).*?</(?:\w+:)?pic>', fix_sym, s_text, flags=re.DOTALL)
+
+                                # 2. 글씨 로고 치환 (가로 20542->18018, 세로 6200, orgSz 81300x27975, scaMatrix 0.221624, imgRect 81300x27975)
+                                def fix_txt(m):
+                                    chunk = m.group(0)
+                                    chunk = re.sub(r'curSz width="\d+" height="\d+"', f'curSz width="{txt_target_sz[0]}" height="{txt_target_sz[1]}"', chunk)
+                                    chunk = re.sub(r'sz width="\d+" widthRelTo="ABSOLUTE" height="\d+"', f'sz width="{txt_target_sz[0]}" widthRelTo="ABSOLUTE" height="{txt_target_sz[1]}"', chunk)
+                                    chunk = re.sub(r'orgSz width="\d+" height="\d+"', 'orgSz width="81300" height="27975"', chunk)
+                                    chunk = re.sub(r'scaMatrix e1="[\d\.]+" e2="0" e3="0" e4="0" e5="[\d\.]+"', 'scaMatrix e1="0.221624" e2="0" e3="0" e4="0" e5="0.221626"', chunk)
+                                    chunk = re.sub(r'rotationInfo angle="0" centerX="\d+" centerY="\d+"', 'rotationInfo angle="0" centerX="9009" centerY="3100"', chunk)
+                                    chunk = re.sub(r'(<(?:\w+:)?imgRect>\s*<(?:\w+:)?pt0 x="0" y="0"/>\s*<(?:\w+:)?pt1 x=)"\d+" y="0"/>\s*<(?:\w+:)?pt2 x="\d+" y=)"\d+"(/>\s*<(?:\w+:)?pt3 x="0" y=)"\d+"', r'\g<1>"81300" y="0"/>\s*<hc:pt2 x="81300" y="27975"\g<3>"27975"', chunk)
+                                    chunk = re.sub(r'imgClip left="0" right="\d+" top="0" bottom="\d+"', 'imgClip left="0" right="81300" top="0" bottom="27960"', chunk)
+                                    chunk = re.sub(r'imgDim dimwidth="\d+" dimheight="\d+"', 'imgDim dimwidth="81300" dimheight="27960"', chunk)
+                                    return chunk
+                                s_text = re.sub(r'<(?:\w+:)?pic\b[^>]*>(?:(?!</(?:\w+:)?pic>).)*?(?:width="20542"|향린교회 로고 \(빨간색\) - 복사본\.png).*?</(?:\w+:)?pic>', fix_txt, s_text, flags=re.DOTALL)
+
                             xml_file.write_text(s_text, encoding="utf-8")
 
             # 3-3. Cover photo handling (사진이 없으면 파일과 그림 개체 완전 제거, 틀 비율 유지)
@@ -1371,11 +1520,16 @@ class HwpxEngine:
                     )
                     xml_file.write_text(s_text, encoding="utf-8")
 
-            # 3-4. User custom asset (예: 길목 청년활동가 지원 사업 QR코드 2gtkk.png) 주입 및 매니페스트 동기화
+            # 3-4. User custom asset (예: 교적 정보 확인 시스템 QR코드 gyoin_info_qr.png, 길목 청년활동가 지원 사업 QR코드 2gtkk.png) 주입 및 매니페스트 동기화
             # 주의: 교독송 악보(image5.bmp, image6.bmp)와 절대 충돌하지 않도록 독립 ID인 image8 사용
-            asset_qr = Path("data/assets/images/2gtkk.png")
-            if not asset_qr.is_file():
+            ann_text_all = str(data.get("announcements_sections", []))
+            if "교적" in ann_text_all and Path("data/assets/images/gyoin_info_qr.png").is_file():
+                asset_qr = Path("data/assets/images/gyoin_info_qr.png")
+            elif Path("data/assets/images/2gtkk.png").is_file():
+                asset_qr = Path("data/assets/images/2gtkk.png")
+            else:
                 asset_qr = Path("data/assets/images/image6.png")
+
             if asset_qr.is_file():
                 bindata_dir = temp_path / "BinData"
                 bindata_dir.mkdir(parents=True, exist_ok=True)

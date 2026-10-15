@@ -181,6 +181,37 @@ class TestSourceCollection(unittest.TestCase):
         passed = run_preflight({}, yaml_path, downloads_dir=self.downloads)
         self.assertTrue(passed)
 
+    def test_hallucinated_scripture_blocks_build(self):
+        """Rule 0: Test that hallucinated/arbitrary scripture is strictly blocked with ValueError."""
+        from src.hwpx_engine import HwpxEngine
+        fake_data = {
+            "metadata": {"date_compact": "20261018"},
+            "worship_1": {
+                "responsive_scripture_1": "듣도 보아도 반가운 내 님의 목소리, 노루처럼 산을 훌쩍 뛰넘고 사슴처럼 언덕을 단숨에 넘어 그가 달려오십니다.",
+                "responsive_scripture_2": "내 사랑하는 님은 노루 같기도 하고 사슴 같기도 합니다.",
+                "responsive_scripture_3": "내 사랑하는 이가 나를 향하여 말합니다."
+            }
+        }
+        engine = HwpxEngine("templates/hwpx/template.hwpx")
+        with self.assertRaises(ValueError) as ctx:
+            engine._verify_official_scripture(fake_data)
+        self.assertIn("[CRITICAL BLOCKER]", str(ctx.exception))
+
+    def test_official_scripture_passes_verification(self):
+        """Rule 0: Test that official homepage scripture passes verification."""
+        from src.hwpx_engine import HwpxEngine
+        official_data = {
+            "metadata": {"date_compact": "20261018"},
+            "worship_1": {
+                "responsive_scripture_1": "아, 사랑하는 임의 목소리! 저기 오는구나. 산을 넘고 언덕을 넘어서 달려오는구나.",
+                "responsive_scripture_2": "사랑하는 나의 임은 노루처럼, 어린 사슴처럼 빠르구나. 벌써 우리 집 담 밖에 서서 창 틈으로 기웃거리며, 창살 틈으로 엿보는구나.",
+                "responsive_scripture_3": "아, 사랑하는 이가 나에게 속삭이네. 나의 사랑 그대, 일어나오. 나의 어여쁜 그대, 어서 나오오."
+            }
+        }
+        engine = HwpxEngine("templates/hwpx/template.hwpx")
+        # Should not raise ValueError
+        engine._verify_official_scripture(official_data)
+
 def run_preflight_sim(yaml_path, downloads_dir=None):
     # This simulates the main.py check so we don't have to patch main.py multiple times for tests
     blocks = []
@@ -212,3 +243,4 @@ def run_preflight_sim(yaml_path, downloads_dir=None):
 
 if __name__ == '__main__':
     unittest.main()
+
