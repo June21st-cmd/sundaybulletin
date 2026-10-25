@@ -120,6 +120,24 @@ class TestBulletinReviewer(unittest.TestCase):
         self.assertTrue(any("새로운 만남" in a for a in summary["added"]))
         self.assertTrue(any("정의와 평화가 입을 맞출 때" in m for m in summary["modified"]))
 
+    def test_scripture_page_rules(self):
+        """성경 쪽수 점검: 미정, 임시(예상), 2개 본문 중 1개 누락 적발."""
+        # 1. '예상' 등 미확정 키워드 포함
+        tentative_data = dict(self.sample_data)
+        tentative_data["worship_1"] = dict(self.sample_data["worship_1"])
+        tentative_data["worship_1"]["scripture"] = "예레미야서 29:4-9 (1111쪽 예상), 베드로전서 2:9-12 (400쪽)"
+        checker = BulletinRuleChecker(tentative_data)
+        issues = checker.check_temporary_markers()
+        self.assertTrue(any("확인 요망" in i.title for i in issues))
+
+        # 2. 본문 2개 중 1개 쪽수 누락
+        missing_one_data = dict(self.sample_data)
+        missing_one_data["worship_1"] = dict(self.sample_data["worship_1"])
+        missing_one_data["worship_1"]["scripture"] = "예레미야서 29:4-9, 베드로전서 2:9-12 (400쪽)"
+        checker2 = BulletinRuleChecker(missing_one_data)
+        issues2 = checker2.check_temporary_markers()
+        self.assertTrue(any("일부 쪽수 누락" in i.title for i in issues2))
+
 
 if __name__ == "__main__":
     unittest.main()

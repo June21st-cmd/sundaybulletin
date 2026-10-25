@@ -169,7 +169,7 @@ class BulletinRuleChecker:
     def check_date_weekdays(self) -> List[ReviewIssue]:
         """규칙 5: 날짜 뒤 괄호 요일이 실제 달력 요일과 일치하는지 전수 검증."""
         issues = []
-        year = self.target_date.year if self.target_date else 2026
+        default_year = self.target_date.year if self.target_date else 2026
         # Matches M월 D일(요일) or M/D(요일)
         patterns = [
             r"(\d{1,2})월\s*(\d{1,2})일\s*\(([월화수목금토일])\)",
@@ -179,6 +179,12 @@ class BulletinRuleChecker:
             for pat in patterns:
                 for match in re.finditer(pat, text):
                     m, d, written_w = int(match.group(1)), int(match.group(2)), match.group(3)
+                    year = default_year
+                    # 날짜 앞에 4자리 연도가 명시되어 있는지 확인 (예: 2027년 1/14(목))
+                    prefix = text[max(0, match.start() - 12):match.start()]
+                    y_match = re.search(r'(20\d{2})\s*[년./-]?\s*$', prefix)
+                    if y_match:
+                        year = int(y_match.group(1))
                     try:
                         cal_date = datetime.date(year, m, d)
                         actual_w = WEEKDAYS_KOREAN[cal_date.weekday()]
@@ -188,7 +194,7 @@ class BulletinRuleChecker:
                                 category="일정/달력",
                                 location="본문 일정",
                                 title="날짜 및 요일 불일치",
-                                message=f"{m}월 {d}일은 실제 '{actual_w}요일'인데 '({written_w})'로 잘못 적혀 있습니다.",
+                                message=f"{year}년 {m}월 {d}일은 실제 '{actual_w}요일'인데 '({written_w})'로 잘못 적혀 있습니다.",
                                 suggestion=f"{m}월 {d}일({actual_w})"
                             ))
                     except ValueError:
@@ -197,7 +203,7 @@ class BulletinRuleChecker:
                             category="일정/달력",
                             location="본문 일정",
                             title="유효하지 않은 날짜",
-                            message=f"달력에 존재하지 않는 날짜입니다: {m}월 {d}일"
+                            message=f"달력에 존재하지 않는 날짜입니다: {year}년 {m}월 {d}일"
                         ))
         return issues
 
@@ -402,16 +408,37 @@ class BulletinRuleChecker:
 
         # 2. 성서 쪽수 미정 점검
         scripture = str(self.worship.get("scripture", ""))
-        if "쪽" not in scripture and scripture:
-            issues.append(ReviewIssue(
-                level=IssueLevel.WARNING,
-                category="미완성항목",
-                location="4면 성서읽기",
-                title="성경 본문 쪽수 미정",
-                message=f"성경 본문({scripture})에 쪽수(예: 000쪽)가 표기되지 않았습니다.",
-                suggestion="성경책을 직접 확인하여 쪽수를 기입해야 합니다.",
-                is_temporary_marker=True
-            ))
+        if scripture:
+            if "쪽" not in scripture:
+                issues.append(ReviewIssue(
+                    level=IssueLevel.WARNING,
+                    category="미완성항목",
+                    location="4면 성서읽기",
+                    title="성경 본문 쪽수 미정",
+                    message=f"성경 본문({scripture})에 쪽수(예: 000쪽)가 표기되지 않았습니다.",
+                    suggestion="성경책을 직접 확인하여 쪽수를 기입해야 합니다.",
+                    is_temporary_marker=True
+                ))
+            elif any(tentative in scripture for tentative in ["예상", "확인 요망", "확인 필요", "미정", "?"]):
+                issues.append(ReviewIssue(
+                    level=IssueLevel.WARNING,
+                    category="미완성항목",
+                    location="4면 성서읽기",
+                    title="성경 본문 쪽수 확인 요망 (임시/예상치)",
+                    message=f"성경 본문({scripture})에 추정치 또는 미확인 표시가 포함되어 있습니다.",
+                    suggestion="교회 비치 성경으로 실제 쪽수를 직접 확인하여 확정 기입해야 합니다.",
+                    is_temporary_marker=True
+                ))
+            elif ("," in scripture or " 및 " in scripture) and scripture.count("쪽") < 2:
+                issues.append(ReviewIssue(
+                    level=IssueLevel.WARNING,
+                    category="미완성항목",
+                    location="4면 성서읽기",
+                    title="성경 본문 일부 쪽수 누락",
+                    message=f"성서읽기 본문이 여러 개이나 일부 구절의 쪽수 표기('쪽')가 누락되었습니다: '{scripture}'",
+                    suggestion="구약과 신약 각 본문 모두 쪽수를 명시해야 합니다.",
+                    is_temporary_marker=True
+                ))
 
         # 3. 본문 내 임시 키워드 검색
         for text in self.all_texts:
