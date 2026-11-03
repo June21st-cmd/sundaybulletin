@@ -16,15 +16,15 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
 from src.config import DEFAULT_HWPX_TEMPLATE, DEFAULT_TYPST_TEMPLATE, OUTPUT_DIR
-from src.hwpx_engine import HwpxEngine
-from src.parser import load_bulletin_data
+from src.hwpx_engine import BulletinValidationError, HwpxArtifactValidationError, HwpxEngine
+from src.parser import load_bulletin_data, prepare_bulletin_data
 from src.typst_engine import TypstEngine
 from src.utils import get_versioned_bulletin_paths
 import re
 
 import yaml
 from scripts.fetch_session_material import find_latest_session_material
-from scripts.validate_bulletin_facts import validate_facts
+from scripts.validate_bulletin_facts import validate_bulletin_facts_data, validate_facts
 from src.reviewer.rules import BulletinRuleChecker
 from src.reviewer.models import IssueLevel
 
@@ -45,8 +45,11 @@ def is_same_file_path(p1: str | Path, p2: str | Path) -> bool:
 
 def run_preflight(data: dict, yaml_path: Path, downloads_dir: Path | None = None) -> bool:
     print("\n🔍 Pre-flight 검증을 시작합니다...")
-    
+
+    prepared_data = prepare_bulletin_data(data, fallback_stem=yaml_path.stem)
+
     raw_text_path = None
+    raw_text = ""
     potential_raw = None
     m = re.search(r'(\d{4})(\d{2})(\d{2})', yaml_path.name)
     if m:
@@ -54,10 +57,16 @@ def run_preflight(data: dict, yaml_path: Path, downloads_dir: Path | None = None
         potential_raw = yaml_path.parent / raw_name
         if potential_raw.exists():
             raw_text_path = str(potential_raw)
-            
-    fact_issues = validate_facts(str(yaml_path), raw_text_path)
-    
-    checker = BulletinRuleChecker(data)
+            raw_text = potential_raw.read_text(encoding="utf-8")
+
+    fact_issues = validate_bulletin_facts_data(
+        prepared_data,
+        raw_text=raw_text,
+        fallback_stem=yaml_path.stem,
+        check_online_scripture=True,
+    )
+
+    checker = BulletinRuleChecker(prepared_data)
     rule_issues = checker.check_all()
     
     blocks = []
@@ -120,9 +129,7 @@ def run_preflight(data: dict, yaml_path: Path, downloads_dir: Path | None = None
         lvl = issue["level"]
         msg = issue["message"]
         
-        if "Rule 34" in cat:
-            continue
-        elif cat == "정례 모임 시간 불일치":
+        if cat == "정례 모임 시간 불일치":
             blocks.append(f"[정례 모임 시간 불일치] {msg}")
         elif cat == "정례 모임 장소 불일치":
             blocks.append(f"[정례 모임 장소 불일치] {msg}")
@@ -218,7 +225,8 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"📖 주보 원고 데이터를 로드합니다: {data_path}")
-    data = load_bulletin_data(data_path)
+    raw_data = load_bulletin_data(data_path, validate=False)
+    data = prepare_bulletin_data(raw_data, fallback_stem=data_path.stem)
     
     if not run_preflight(data, data_path):
         sys.exit(1)
@@ -245,7 +253,16 @@ def main():
         if hwpx_tpl.is_file():
             print(f"🖨️ HWPX 템플릿 치환 중: {hwpx_tpl.name}")
             hwpx_engine = HwpxEngine(hwpx_tpl)
-            actual_hwpx = hwpx_engine.generate(data, out_hwpx)
+            try:
+                actual_hwpx = hwpx_engine.generate(data, out_hwpx)
+            except OSError as exc:
+                print(f"\n❌ [최종 HWPX 파일 확정 실패] 파일 저장 도중 입출력 오류가 발생해 중단합니다: {exc}")
+                sys.exit(1)
+            except (BulletinValidationError, HwpxArtifactValidationError) as exc:
+                print("\n❌ [최종 HWPX 산출물 검증 차단] 산출물 검증 게이트를 통과하지 못해 파일을 저장하지 않고 중단합니다:")
+                for line in str(exc).splitlines():
+                    print(f"  - {line}")
+                sys.exit(1)
             file_size_mb = actual_hwpx.stat().st_size / (1024 * 1024)
             print(f"✅ HWPX 인쇄본 생성 완료: {actual_hwpx} ({file_size_mb:.2f} MB)")
         else:

@@ -138,6 +138,135 @@ class TestBulletinReviewer(unittest.TestCase):
         issues2 = checker2.check_temporary_markers()
         self.assertTrue(any("일부 쪽수 누락" in i.title for i in issues2))
 
+    def test_ecumenical_and_ongoing_same_day_no_conflicting_today_warning(self):
+        """에큐메니칼 소식 및 함께 만드는 향린에 배치된 당일 행사에 대해 '오늘 일정 추가' 상충 경고가 발생하지 않아야 함."""
+        synth_data = {
+            "metadata": {"date_compact": "20261115", "date_korean": "2026년 11월 15일"},
+            "worship_1": {"choir_song_title": "가상찬양", "scripture": "창세기 1:1 (1쪽)"},
+            "announcements_sections": [
+                {"title": "1. 오늘 일정 안내", "items": []},
+                {"title": "2. 함께 만드는 향린", "items": [{"title": "가상도서모임", "content": "11/15(일) 오늘 도서 나눔 모임"}]},
+                {"title": "3. 이번주 일정 안내", "items": []},
+                {"title": "4. 이후 일정 안내", "items": []},
+                {"title": "5. 에큐메니칼 소식", "items": [{"title": "NCCK 가상연합예배", "content": "11/15(일) 오늘 15:00 연합예배"}]},
+                {"title": "6. 감사헌금", "items": []},
+            ],
+        }
+        checker = BulletinRuleChecker(synth_data)
+        today_warns = [i for i in checker.check_all() if i.category == "오늘일정누락"]
+        self.assertEqual(today_warns, [])
+
+    def test_first_section_not_assumed_today_and_internal_today_missing_still_warns(self):
+        """첫 섹션을 무조건 오늘 일정으로 간주하지 않으며, 내부 일정 코너에 당일 행사가 있으면 정상 경고함."""
+        # 1. 첫 섹션이 '3. 이번주 일정 안내'인 비정상 입력에서 첫 섹션을 '오늘 일정'으로 오인하지 않음
+        no_today_sec = {
+            "metadata": {"date_compact": "20261115"},
+            "announcements_sections": [
+                {"title": "3. 이번주 일정 안내", "items": [{"title": "가상내부회의", "content": "11/15(일) 13:00 회의"}]},
+            ],
+        }
+        issues_a = BulletinRuleChecker(no_today_sec).check_today_schedule_missing()
+        self.assertEqual(len(issues_a), 1)
+        self.assertEqual(issues_a[0].category, "오늘일정누락")
+
+        # 2. 정상 6단 구조에서 '3. 이번주 일정 안내'에 당일 내부 행사가 잘못 들어간 경우 경고 유지
+        misplaced_internal = {
+            "metadata": {"date_compact": "20261115"},
+            "announcements_sections": [
+                {"title": "1. 오늘 일정 안내", "items": []},
+                {"title": "2. 함께 만드는 향린", "items": []},
+                {"title": "3. 이번주 일정 안내", "items": [{"title": "가상내부회의", "content": "11/15(일) 14:00 회의"}]},
+                {"title": "4. 이후 일정 안내", "items": []},
+                {"title": "5. 에큐메니칼 소식", "items": []},
+                {"title": "6. 감사헌금", "items": []},
+            ],
+        }
+        issues_b = BulletinRuleChecker(misplaced_internal).check_today_schedule_missing()
+        self.assertEqual(len(issues_b), 1)
+
+    def test_year_end_date_weekday_rollover(self):
+        """연말 주보(2026-12-27)에서 연도 표기 없는 새해 날짜(1/3(일), 1/4(월))의 요일을 2027년 기준으로 판별."""
+        year_end_ok = {
+            "metadata": {"date_compact": "20261227"},
+            "announcements_sections": [
+                {"title": "1. 오늘 일정 안내", "items": [{"title": "가상모임", "content": "12/27(일) 13:00"}]},
+                {"title": "2. 함께 만드는 향린", "items": []},
+                {"title": "3. 이번주 일정 안내", "items": [{"title": "가상신년모임", "content": "1/3(일) 13:00"}]},
+                {"title": "4. 이후 일정 안내", "items": [{"title": "가상수련회", "content": "1/4(월) 10:00"}]},
+                {"title": "5. 에큐메니칼 소식", "items": []},
+                {"title": "6. 감사헌금", "items": []},
+            ],
+        }
+        self.assertEqual(BulletinRuleChecker(year_end_ok).check_date_weekdays(), [])
+
+        year_end_bad = {
+            "metadata": {"date_compact": "20261227"},
+            "announcements_sections": [
+                {"title": "3. 이번주 일정 안내", "items": [{"title": "가상신년모임", "content": "1/3(토) 13:00"}]},
+            ],
+        }
+        self.assertEqual(len(BulletinRuleChecker(year_end_bad).check_date_weekdays()), 1)
+
+    def test_past_year_and_unconfirmed_year_weekday_consistency(self):
+        """발행일 2026-11-15 기준 '작년 11/18(화)' 존중, 연도 미확정 날짜 임의 연도 ERROR 금지, 명시적 ISO date 지원 검증."""
+        # 1. '작년 11/18(화)'는 2025-11-18(화요일)로 판별되어 ERROR가 없어야 함
+        past_ok = {
+            "metadata": {"date_compact": "20261115"},
+            "announcements_sections": [
+                {"title": "1. 오늘 일정 안내", "items": [{"title": "가상모임", "content": "작년 11/18(화) 19:00 기록"}]},
+            ],
+        }
+        self.assertEqual(BulletinRuleChecker(past_ok).check_date_weekdays(), [])
+
+        # '작년 11/18(수)'는 2025-11-18이 화요일이므로 요일 불일치 ERROR 검출
+        past_bad = {
+            "metadata": {"date_compact": "20261115"},
+            "announcements_sections": [
+                {"title": "1. 오늘 일정 안내", "items": [{"title": "가상모임", "content": "작년 11/18(수) 19:00 기록"}]},
+            ],
+        }
+        past_bad_issues = BulletinRuleChecker(past_bad).check_date_weekdays()
+        self.assertEqual(len(past_bad_issues), 1)
+        self.assertEqual(past_bad_issues[0].level, IssueLevel.ERROR)
+        self.assertIn("2025년 11월 18일", past_bad_issues[0].message)
+
+        # 2. 문맥만으로 연도를 확정할 수 없는 '9/2(화)', '2/10(화)'는 임의 연도로 확정해 ERROR를 만들지 않고 WARNING으로 표시
+        unconfirmed = {
+            "metadata": {"date_compact": "20261115"},
+            "announcements_sections": [
+                {
+                    "title": "4. 이후 일정 안내",
+                    "items": [
+                        {"title": "가상모임A", "content": "9/2(화) 19:00"},
+                        {"title": "가상모임B", "content": "2/10(화) 10:00"},
+                    ],
+                },
+            ],
+        }
+        unc_issues = BulletinRuleChecker(unconfirmed).check_date_weekdays()
+        self.assertEqual([i for i in unc_issues if i.level == IssueLevel.ERROR], [])
+        self.assertEqual(len([i for i in unc_issues if i.level == IssueLevel.WARNING]), 2)
+
+        # 3. 항목에 명시적 ISO date('2027-02-10')가 있으면 해당 연도로 요일 검증 수행
+        iso_ok = {
+            "metadata": {"date_compact": "20261115"},
+            "announcements_sections": [
+                {"title": "4. 이후 일정 안내", "items": [{"title": "가상수련회", "date": "2027-02-10", "content": "2/10(수) 10:00"}]},
+            ],
+        }
+        self.assertEqual(BulletinRuleChecker(iso_ok).check_date_weekdays(), [])
+
+        iso_bad = {
+            "metadata": {"date_compact": "20261115"},
+            "announcements_sections": [
+                {"title": "4. 이후 일정 안내", "items": [{"title": "가상수련회", "date": "2027-02-10", "content": "2/10(화) 10:00"}]},
+            ],
+        }
+        iso_bad_issues = BulletinRuleChecker(iso_bad).check_date_weekdays()
+        self.assertEqual(len(iso_bad_issues), 1)
+        self.assertEqual(iso_bad_issues[0].level, IssueLevel.ERROR)
+        self.assertIn("2027년 2월 10일", iso_bad_issues[0].message)
+
 
 if __name__ == "__main__":
     unittest.main()

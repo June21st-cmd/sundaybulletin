@@ -3,6 +3,8 @@ import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from scripts.validate_bulletin_facts import validate_bulletin_facts_data
+from src.parser import prepare_bulletin_data
 from .models import BulletinReviewReport, IssueLevel, ReviewIssue
 from .rules import BulletinRuleChecker
 from .cross_week import CrossWeekComparator
@@ -18,14 +20,20 @@ class BulletinReviewer:
         current_data: Dict[str, Any],
         prev_bulletin_data: Optional[Dict[str, Any]] = None,
         prev_version_data: Optional[Dict[str, Any]] = None,
-        version_label: str = "초안 v1"
+        version_label: str = "초안 v1",
+        raw_text: str = "",
+        fallback_stem: str = "",
     ):
         self.current = current_data
         self.prev_bulletin = prev_bulletin_data
         self.prev_version = prev_version_data
         self.version_label = version_label
+        self.raw_text = raw_text
+        self.fallback_stem = fallback_stem
 
-        meta = current_data.get("metadata", {})
+        meta = current_data.get("metadata", {}) if isinstance(current_data, dict) else {}
+        if not isinstance(meta, dict):
+            meta = {}
         self.target_date = str(meta.get("date_korean") or meta.get("date_compact") or "날짜 미상")
 
     def run_review(self) -> BulletinReviewReport:
@@ -35,25 +43,51 @@ class BulletinReviewer:
             target_version=self.version_label
         )
 
-        # 1. 15대 규칙 및 정적 정합성 검사
-        rule_checker = BulletinRuleChecker(self.current)
+        prepared = prepare_bulletin_data(self.current, fallback_stem=self.fallback_stem)
+
+        # 1. 공통 구조·분류·날짜·정례모임·Rule 34 데이터 검증 + 15대 고유 규칙 검사
+        fact_issues = validate_bulletin_facts_data(
+            prepared,
+            raw_text=self.raw_text,
+            fallback_stem=self.fallback_stem,
+            check_online_scripture=False,
+        )
+        for fact in fact_issues:
+            lvl_str = str(fact.get("level", "INFO")).upper()
+            lvl = IssueLevel(lvl_str) if lvl_str in IssueLevel._value2member_map_ else IssueLevel.INFO
+            cat = str(fact.get("category", "팩트검증"))
+            sec = str(fact.get("section", "")).strip()
+            item = str(fact.get("item", "")).strip()
+            location = f"5면 공동관심사 ({sec})" if sec else "5면 공동관심사"
+            title = f"{cat} ({item})" if item else cat
+            report.issues.append(
+                ReviewIssue(
+                    level=lvl,
+                    category=cat,
+                    location=location,
+                    title=title,
+                    message=str(fact.get("message", "")),
+                )
+            )
+
+        rule_checker = BulletinRuleChecker(prepared)
         report.issues.extend(rule_checker.check_all())
 
         # 2. 직전 주 주보 대조 검사
-        comparator = CrossWeekComparator(self.current, self.prev_bulletin)
+        comparator = CrossWeekComparator(prepared, self.prev_bulletin)
         cw_issues, cw_summary = comparator.compare()
         report.issues.extend(cw_issues)
         report.cross_week_summary = cw_summary
 
         # 3. 버전 간 변경사항 추적 (수정본 비교 시)
         if self.prev_version:
-            diff_tracker = VersionDiffTracker(self.current, self.prev_version)
+            diff_tracker = VersionDiffTracker(prepared, self.prev_version)
             diff_issues, diff_summary = diff_tracker.track_diff()
             report.issues.extend(diff_issues)
             report.diff_summary = diff_summary
 
         # 4. 일반 국어 맞춤법, 겹조사, 단어 중복 및 문장 부호 점검
-        spell_checker = KoreanSpellChecker(self.current)
+        spell_checker = KoreanSpellChecker(prepared)
         report.issues.extend(spell_checker.check_all())
 
         return report
@@ -125,10 +159,10 @@ class BulletinReviewer:
                 for item in diff["removed"]:
                     lines.append(f"    - {item}")
 
-        # Section 4: 15대 고유 규칙 및 오류 점검 (맞춤법 제외)
-        rule_categories = {"고유규칙", "공간/층수", "일정/달력", "새교우", "주일명칭", "예전찬송", "생활실천다짐", "소식번호", "오늘일정누락", "예배위원", "주일봉사", "성서표기", "임시문구", "미완성항목"}
-        rule_errors = [i for i in report.issues if i.level == IssueLevel.ERROR and not i.is_temporary_marker and i.category in rule_categories]
-        rule_warnings = [i for i in report.issues if i.level == IssueLevel.WARNING and not i.is_temporary_marker and i.category in rule_categories]
+        # Section 4: 15대 고유 규칙 및 공통 팩트/분류 오류 점검 (맞춤법·직전주·버전비교 제외)
+        excluded_sec4 = {"직전주대조", "예배위원릴레이", "지난일정방치", "소식연속성", "버전변경", "국어맞춤법", "문장부호"}
+        rule_errors = [i for i in report.issues if i.level == IssueLevel.ERROR and not i.is_temporary_marker and i.category not in excluded_sec4]
+        rule_warnings = [i for i in report.issues if i.level == IssueLevel.WARNING and not i.is_temporary_marker and i.category not in excluded_sec4]
 
         lines.append("")
         lines.append("🔍 4. 향린 15대 고유 규칙 및 오류 점검")
@@ -136,7 +170,8 @@ class BulletinReviewer:
             lines.append("  ✅ 전화번호, 신도회 명칭, 층수, 요일 등 모든 규칙 통과!")
         else:
             for err in rule_errors:
-                lines.append(f"  ❌ [{err.location}] {err.title}: {err.message} (제안: {err.suggestion})")
+                sugg = f" (제안: {err.suggestion})" if err.suggestion else ""
+                lines.append(f"  ❌ [{err.location}] {err.title}: {err.message}{sugg}")
             for warn in rule_warnings:
                 lines.append(f"  ⚠️ [{warn.location}] {warn.title}: {warn.message}")
 

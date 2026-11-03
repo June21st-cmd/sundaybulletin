@@ -1,17 +1,601 @@
 """HWPX template tag substitution and flattening engine."""
 import html
+import os
 from pathlib import Path
 import re
 import shutil
 import tempfile
 from typing import Any, Dict, List
+import uuid
 import zipfile
+
+from lxml import etree
+
+from scripts.validate_bulletin_facts import validate_bulletin_facts_data
+from src.parser import (
+    classify_announcement_section,
+    is_rule34_monthly_meeting_item,
+    parse_bulletin_date,
+    prepare_bulletin_data,
+)
+
+
+class BulletinValidationError(ValueError):
+    """Raised when bulletin input data fails shared structural, classification, or Rule 34 validation."""
+
+    def __init__(self, issues: List[Dict[str, Any]]):
+        self.issues = issues
+        summary = "\n".join(
+            f"[{iss.get('category', '검증 오류')}] {iss.get('section', '')}: {iss.get('message', '')}"
+            for iss in issues
+        )
+        super().__init__(summary)
+
+
+class HwpxArtifactValidationError(ValueError):
+    """Raised when a staged HWPX output artifact fails pre-export XML, style, content, or Rule 34 checks.
+
+    Error details intentionally exclude personal names and full manuscript text, recording only
+    check identifiers, XML locations, style IDs, field paths, and counts.
+    """
+
+    def __init__(self, issues: List[Dict[str, str]]):
+        self.issues = issues
+        summary = "\n".join(
+            f"[{iss.get('check', 'artifact_error')}] {iss.get('location', 'unknown')}: {iss.get('detail', '')}"
+            for iss in issues
+        )
+        super().__init__(summary)
+
+
+def _xml_local_name(el: Any) -> str:
+    tag = getattr(el, "tag", None)
+    if not isinstance(tag, str):
+        return ""
+    if "}" in tag:
+        return tag.rsplit("}", 1)[1]
+    return tag
+
+
+def _extract_t_text(t_el: Any) -> str:
+    """Extract text from a <t> element, converting nested <lineBreak/> children and preserving .tail text."""
+    chunks: List[str] = []
+    if t_el.text:
+        chunks.append(t_el.text)
+    for sub in t_el:
+        if _xml_local_name(sub) == "lineBreak":
+            chunks.append("\n")
+        else:
+            chunks.append(_extract_t_text(sub))
+        if sub.tail:
+            chunks.append(sub.tail)
+    return "".join(chunks)
+
+
+def _extract_direct_p_text(p_el: Any) -> str:
+    """Extract paragraph text from direct <run>/<t> and <lineBreak/> children, excluding nested <tbl>/<pic>."""
+    parts: List[str] = []
+    for run in p_el:
+        if _xml_local_name(run) != "run":
+            continue
+        for child in run:
+            lname = _xml_local_name(child)
+            if lname == "t":
+                parts.append(_extract_t_text(child))
+            elif lname == "lineBreak":
+                parts.append("\n")
+    return "".join(parts)
+
+
+def _norm_ws(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def validate_generated_hwpx(
+    hwpx_path: Path | str,
+    data: Dict[str, Any],
+    fallback_stem: str = "",
+) -> None:
+    """Inspect a staged HWPX archive before exporting it to a final path.
+
+    Note: XML parsing here checks XML well-formedness only, not full HWPX schema conformance
+    or visual print layout / page-break rendering in Hancom Office.
+    """
+    target_path = Path(hwpx_path)
+    issues: List[Dict[str, str]] = []
+
+    try:
+        zf_ctx = zipfile.ZipFile(target_path, "r")
+    except (OSError, zipfile.BadZipFile):
+        raise HwpxArtifactValidationError([
+            {"check": "invalid_zip", "location": target_path.name, "detail": "not a valid HWPX ZIP archive"}
+        ])
+
+    with zf_ctx as zf:
+        names = set(zf.namelist())
+        if "Contents/header.xml" not in names:
+            issues.append({
+                "check": "missing_xml_entry",
+                "location": "Contents/header.xml",
+                "detail": "required header.xml entry is missing",
+            })
+        section_entries = sorted(n for n in names if re.fullmatch(r"Contents/section\d+\.xml", n))
+        if not section_entries:
+            issues.append({
+                "check": "missing_xml_entry",
+                "location": "Contents/section*.xml",
+                "detail": "no section XML entries found",
+            })
+        if issues:
+            raise HwpxArtifactValidationError(issues)
+
+        strict_parser = etree.XMLParser(recover=False, resolve_entities=False)
+        header_root = None
+        try:
+            header_root = etree.fromstring(zf.read("Contents/header.xml"), strict_parser)
+        except etree.XMLSyntaxError as exc:
+            issues.append({
+                "check": "xml_syntax",
+                "location": "Contents/header.xml",
+                "detail": f"line={exc.lineno}, col={exc.offset}",
+            })
+
+        parsed_sections: List[tuple[str, Any]] = []
+        for sec_entry in section_entries:
+            try:
+                sec_root = etree.fromstring(zf.read(sec_entry), strict_parser)
+                parsed_sections.append((sec_entry, sec_root))
+            except etree.XMLSyntaxError as exc:
+                issues.append({
+                    "check": "xml_syntax",
+                    "location": sec_entry,
+                    "detail": f"line={exc.lineno}, col={exc.offset}",
+                })
+
+        if issues or header_root is None:
+            raise HwpxArtifactValidationError(issues)
+
+    # 1. Resolve header.xml HANGUL fontfaces and charPr styles + detect duplicate charPr IDs
+    hangul_fonts: Dict[str, str] = {}
+    for el in header_root.iter():
+        if _xml_local_name(el) == "fontface" and el.get("lang") == "HANGUL":
+            for f_el in el:
+                if _xml_local_name(f_el) == "font" and f_el.get("id") is not None:
+                    hangul_fonts[str(f_el.get("id"))] = str(f_el.get("face", ""))
+
+    charpr_styles: Dict[str, Dict[str, Any]] = {}
+    for el in header_root.iter():
+        if _xml_local_name(el) != "charPr":
+            continue
+        cid = el.get("id")
+        if cid is None:
+            issues.append({
+                "check": "charpr_missing_id",
+                "location": "Contents/header.xml",
+                "detail": "charPr element without id",
+            })
+            continue
+        if cid in charpr_styles:
+            issues.append({
+                "check": "charpr_duplicate",
+                "location": "Contents/header.xml",
+                "detail": f"charPr id={cid}",
+            })
+        raw_height = str(el.get("height", ""))
+        height_val = int(raw_height) if raw_height.isdigit() else None
+        font_ref = next((ch for ch in el if _xml_local_name(ch) == "fontRef"), None)
+        hangul_fid = str(font_ref.get("hangul")) if (font_ref is not None and font_ref.get("hangul") is not None) else ""
+        font_face = hangul_fonts.get(hangul_fid, "")
+        has_bold_tag = any(_xml_local_name(ch) == "bold" for ch in el)
+        is_bold = has_bold_tag or ("bold" in font_face.lower())
+        charpr_styles[cid] = {
+            "font_face": font_face,
+            "height": height_val,
+            "is_bold": is_bold,
+        }
+
+    # 2. Check undefined charPrIDRef references in header.xml and all section*.xml
+    for idx, el in enumerate(header_root.iter()):
+        ref_id = el.get("charPrIDRef")
+        if ref_id is None:
+            continue
+        if _xml_local_name(el) == "paraHead" and ref_id == "4294967295":
+            continue
+        if ref_id not in charpr_styles:
+            issues.append({
+                "check": "charpr_undefined_ref",
+                "location": f"Contents/header.xml:{_xml_local_name(el)}#{idx}",
+                "detail": f"charPrIDRef={ref_id}",
+            })
+
+    for sec_entry, sec_root in parsed_sections:
+        for idx, el in enumerate(sec_root.iter()):
+            ref_id = el.get("charPrIDRef")
+            if ref_id is None:
+                continue
+            if _xml_local_name(el) == "paraHead" and ref_id == "4294967295":
+                continue
+            if ref_id not in charpr_styles:
+                issues.append({
+                    "check": "charpr_undefined_ref",
+                    "location": f"{sec_entry}:{_xml_local_name(el)}#{idx}",
+                    "detail": f"charPrIDRef={ref_id}",
+                })
+
+    # 3. Check residual unreplaced {{...}} placeholder tags
+    hdr_placeholders = re.findall(r"\{\{[^{}\r\n]+\}\}", "".join(header_root.itertext()))
+    if hdr_placeholders:
+        issues.append({
+            "check": "unreplaced_placeholder",
+            "location": "Contents/header.xml",
+            "detail": f"count={len(hdr_placeholders)}",
+        })
+
+    for sec_entry, sec_root in parsed_sections:
+        p_idx = 0
+        for el in sec_root.iter():
+            if _xml_local_name(el) != "p":
+                continue
+            p_txt = _extract_direct_p_text(el)
+            matches = re.findall(r"\{\{[^{}\r\n]+\}\}", p_txt)
+            if matches:
+                issues.append({
+                    "check": "unreplaced_placeholder",
+                    "location": f"{sec_entry}:p#{p_idx}",
+                    "detail": f"count={len(matches)}",
+                })
+            p_idx += 1
+
+    # 4. Inspect target roster box (Table 10): actual resolved style properties & content completeness/duplication
+    prayers = data.get("prayer_requests", data.get("prayers", {})) if isinstance(data, dict) else {}
+    if not isinstance(prayers, dict):
+        prayers = {}
+
+    raw_nm = data.get("new_members", []) if isinstance(data, dict) else []
+    if isinstance(raw_nm, str):
+        nm_values = [raw_nm.strip()] if raw_nm.strip() else []
+    elif isinstance(raw_nm, list):
+        nm_values = [str(x).strip() for x in raw_nm if str(x).strip()]
+    else:
+        nm_values = []
+
+    h1 = str(prayers.get("healing_1", prayers.get("health_1", data.get("healing_prayer_1", "") if isinstance(data, dict) else ""))).strip()
+    h2 = str(prayers.get("healing_2", prayers.get("health_2", data.get("healing_prayer_2", "") if isinstance(data, dict) else ""))).strip()
+    h3 = str(prayers.get("healing_3", prayers.get("health_3", data.get("healing_prayer_3", "") if isinstance(data, dict) else ""))).strip()
+    mil = str(prayers.get("military", data.get("military_prayer_names", "") if isinstance(data, dict) else "")).strip()
+    ov1 = str(prayers.get("overseas_1", data.get("overseas_prayer_1", "") if isinstance(data, dict) else "")).strip()
+    ov2 = str(prayers.get("overseas_2", data.get("overseas_prayer_2", "") if isinstance(data, dict) else "")).strip()
+
+    requested_by_sec: Dict[str, List[tuple[str, str]]] = {
+        "new_members": [(f"new_members[{i}]", v) for i, v in enumerate(nm_values)],
+        "healing": [
+            (fpath, val)
+            for fpath, val in [
+                ("prayer_requests.healing_1", h1),
+                ("prayer_requests.healing_2", h2),
+                ("prayer_requests.healing_3", h3),
+            ]
+            if val
+        ],
+        "military": [("prayer_requests.military", mil)] if mil else [],
+        "overseas": [
+            (fpath, val)
+            for fpath, val in [
+                ("prayer_requests.overseas_1", ov1),
+                ("prayer_requests.overseas_2", ov2),
+            ]
+            if val
+        ],
+    }
+    has_any_requested_roster = any(bool(entries) for entries in requested_by_sec.values())
+
+    roster_found: tuple[str, Any] | None = None
+    for sec_entry, sec_root in parsed_sections:
+        for el in sec_root.iter():
+            if _xml_local_name(el) == "tbl" and el.get("id") == "1111275716":
+                roster_found = (sec_entry, el)
+                break
+        if roster_found is not None:
+            break
+
+    if roster_found is None:
+        for sec_entry, sec_root in parsed_sections:
+            for el in sec_root.iter():
+                if _xml_local_name(el) == "tbl":
+                    tbl_txt = "".join(el.itertext())
+                    if "▯건강회복" in tbl_txt or "▯등록 새교우" in tbl_txt:
+                        roster_found = (sec_entry, el)
+                        break
+            if roster_found is not None:
+                break
+
+    if roster_found is None:
+        if has_any_requested_roster:
+            issues.append({
+                "check": "roster_boundary_missing",
+                "location": "Contents/section*.xml",
+                "detail": "Table 10 (id=1111275716) boundary missing for requested roster fields",
+            })
+    else:
+        roster_sec_entry, roster_tbl = roster_found
+        sublist_el = next((el for el in roster_tbl.iter() if _xml_local_name(el) == "subList"), None)
+        section_body_lines: Dict[str, List[str]] = {
+            "new_members": [],
+            "healing": [],
+            "military": [],
+            "overseas": [],
+        }
+        current_roster_sec: str | None = None
+        roster_paras = [ch for ch in sublist_el if _xml_local_name(ch) == "p"] if sublist_el is not None else []
+
+        for pi, p_el in enumerate(roster_paras):
+            para_chunks: List[str] = []
+            run_children = [ch for ch in p_el if _xml_local_name(ch) == "run"]
+            for ri, run_el in enumerate(run_children):
+                r_parts: List[str] = []
+                for ch in run_el:
+                    lname = _xml_local_name(ch)
+                    if lname == "t":
+                        r_parts.append(_extract_t_text(ch))
+                    elif lname == "lineBreak":
+                        r_parts.append("\n")
+                r_txt = "".join(r_parts)
+                s_txt = r_txt.strip()
+                if not s_txt:
+                    if r_txt and current_roster_sec:
+                        para_chunks.append(" ")
+                    continue
+
+                if s_txt.startswith("▯"):
+                    if s_txt.startswith("▯등록 새교우"):
+                        current_roster_sec = "new_members"
+                    elif s_txt.startswith("▯건강회복"):
+                        current_roster_sec = "healing"
+                    elif s_txt.startswith("▯군복무"):
+                        current_roster_sec = "military"
+                    elif s_txt.startswith("▯해외 체류") or s_txt.startswith("▯해외체류"):
+                        current_roster_sec = "overseas"
+
+                    after_bar = s_txt.split("╻", 1)[1].strip() if "╻" in s_txt else ""
+                    if not after_bar:
+                        # Pure roster subheader run: Bold style is normal and permitted
+                        continue
+                    if current_roster_sec:
+                        para_chunks.append(after_bar)
+                else:
+                    if current_roster_sec:
+                        para_chunks.append(r_txt)
+
+                if current_roster_sec in section_body_lines:
+                    cid = str(run_el.get("charPrIDRef", ""))
+                    st = charpr_styles.get(cid)
+                    if st is not None:
+                        loc = f"{roster_sec_entry}:tbl#1111275716/p[{pi}]/run[{ri}]"
+                        if st["is_bold"]:
+                            issues.append({
+                                "check": "roster_body_bold",
+                                "location": loc,
+                                "detail": f"section={current_roster_sec}, charPrIDRef={cid}, fontface={st['font_face'] or 'UNKNOWN'}, bold=True",
+                            })
+                        if st["font_face"] != "경기천년바탕 Regular":
+                            issues.append({
+                                "check": "roster_body_font",
+                                "location": loc,
+                                "detail": f"section={current_roster_sec}, charPrIDRef={cid}, fontface={st['font_face'] or 'UNKNOWN'}",
+                            })
+                        if st["height"] != 1550:
+                            issues.append({
+                                "check": "roster_body_size",
+                                "location": loc,
+                                "detail": f"section={current_roster_sec}, charPrIDRef={cid}, height={st['height']}",
+                            })
+
+            if current_roster_sec in section_body_lines and para_chunks:
+                joined_line = _norm_ws("".join(para_chunks))
+                if joined_line:
+                    section_body_lines[current_roster_sec].append(joined_line)
+
+        for sec_key, field_entries in requested_by_sec.items():
+            if not field_entries:
+                continue
+            sec_norm = " ".join(section_body_lines.get(sec_key, []))
+            norm_entries = [(fpath, _norm_ws(val)) for fpath, val in field_entries if _norm_ws(val)]
+            expected_counts: Dict[str, int] = {}
+            for _, nval in norm_entries:
+                expected_counts[nval] = expected_counts.get(nval, 0) + 1
+            seen_dup_vals = set()
+            for fpath, nval in norm_entries:
+                actual_cnt = len(re.findall(rf"(?<!\S){re.escape(nval)}(?!\S)", sec_norm))
+                exp_cnt = expected_counts[nval]
+                if actual_cnt < exp_cnt:
+                    issues.append({
+                        "check": "roster_content_missing",
+                        "location": f"{roster_sec_entry}:tbl#1111275716/{sec_key}",
+                        "detail": f"field={fpath}, expected={exp_cnt}, actual={actual_cnt}",
+                    })
+                elif actual_cnt > exp_cnt and nval not in seen_dup_vals:
+                    issues.append({
+                        "check": "roster_content_duplicate",
+                        "location": f"{roster_sec_entry}:tbl#1111275716/{sec_key}",
+                        "detail": f"field={fpath}, expected={exp_cnt}, actual={actual_cnt}",
+                    })
+                    seen_dup_vals.add(nval)
+
+    # 5. Parse rendered announcement region & verify requested announcements_sections + Rule 34 final notice/box
+    rendered_ann_sections: List[Dict[str, Any]] = []
+    ann_region_sec_entry: str | None = None
+    has_online_offering_end = False
+
+    for sec_entry, sec_root in parsed_sections:
+        top_paras = [ch for ch in sec_root if _xml_local_name(ch) == "p"]
+        start_idx = None
+        end_idx = None
+        for idx, p_el in enumerate(top_paras):
+            p_txt = _norm_ws(_extract_direct_p_text(p_el))
+            if start_idx is None:
+                if p_el.get("paraPrIDRef") == "94" and classify_announcement_section(p_txt) is not None:
+                    start_idx = idx
+            elif "[온라인헌금 안내]" in p_txt or "[온라인헌금안내]" in p_txt.replace(" ", ""):
+                end_idx = idx
+                break
+
+        if start_idx is not None:
+            ann_region_sec_entry = sec_entry
+            has_online_offering_end = end_idx is not None
+            region_slice = top_paras[start_idx:end_idx] if end_idx is not None else top_paras[start_idx:]
+            curr_group: Dict[str, Any] | None = None
+            for p_el in region_slice:
+                p_txt = _norm_ws(_extract_direct_p_text(p_el))
+                para_pr = p_el.get("paraPrIDRef")
+                if para_pr in {"94", "70"} and p_txt:
+                    curr_group = {
+                        "header_text": p_txt,
+                        "role": classify_announcement_section(p_txt),
+                        "paras": [],
+                    }
+                    rendered_ann_sections.append(curr_group)
+                elif curr_group is not None:
+                    curr_group["paras"].append(p_el)
+            break
+
+    ann_sections = data.get("announcements_sections") if isinstance(data, dict) else None
+    if isinstance(ann_sections, list) and len(ann_sections) > 0:
+        if ann_region_sec_entry is None or not has_online_offering_end or not rendered_ann_sections:
+            issues.append({
+                "check": "boundary_substitution_failed",
+                "location": "Contents/section*.xml",
+                "detail": "announcements_sections boundary (paraPrIDRef=94 .. [온라인헌금 안내]) not reflected",
+            })
+        else:
+            rendered_headers = [g["header_text"] for g in rendered_ann_sections]
+            for sec_idx, req_sec in enumerate(ann_sections):
+                if not isinstance(req_sec, dict):
+                    continue
+                req_title = _norm_ws(str(req_sec.get("title", "")))
+                if not req_title:
+                    continue
+                matched_group = next(
+                    (g for g in rendered_ann_sections if g["header_text"] == req_title or g["header_text"].startswith(req_title + " ")),
+                    None,
+                )
+                if matched_group is None:
+                    issues.append({
+                        "check": "boundary_substitution_failed" if not any(
+                            any(h == _norm_ws(str(s.get("title", ""))) or h.startswith(_norm_ws(str(s.get("title", ""))) + " ") for h in rendered_headers)
+                            for s in ann_sections if isinstance(s, dict) and _norm_ws(str(s.get("title", "")))
+                        ) else "announcement_section_missing",
+                        "location": f"{ann_region_sec_entry}:announcements",
+                        "detail": f"field=announcements_sections[{sec_idx}].title",
+                    })
+                    continue
+
+                rendered_item_texts = [_norm_ws(_extract_direct_p_text(p_el)) for p_el in matched_group["paras"]]
+                req_items = req_sec.get("items", [])
+                if not isinstance(req_items, list):
+                    continue
+                for item_idx, item in enumerate(req_items):
+                    if isinstance(item, dict):
+                        i_title = str(item.get("title", "")).strip()
+                        i_content = str(item.get("content", "")).strip()
+                    else:
+                        i_title = str(item).strip()
+                        i_content = ""
+                    if not i_title and not i_content:
+                        continue
+                    if "감사헌금" in req_title:
+                        expected_p_txt = _norm_ws(i_content or i_title)
+                    elif i_content:
+                        expected_p_txt = _norm_ws(f"∙ {i_title}: {i_content}")
+                    else:
+                        expected_p_txt = _norm_ws(f"∙ {i_title}")
+                    if expected_p_txt not in rendered_item_texts:
+                        issues.append({
+                            "check": "announcement_item_missing",
+                            "location": f"{ann_region_sec_entry}:announcements",
+                            "detail": f"field=announcements_sections[{sec_idx}].items[{item_idx}]",
+                        })
+
+    # 6. Rule 34 final output verification (1st week: 부서 월례회 + tbl 1185698824; 2nd week: 신도회 월례회 + tbl 1137471996)
+    bulletin_date = parse_bulletin_date(data, fallback_stem) if isinstance(data, dict) else None
+    if bulletin_date is not None and 1 <= bulletin_date.day <= 14:
+        if bulletin_date.day <= 7:
+            expected_mm_title = "부서 월례회"
+            expected_box_id = "1185698824"
+            expected_groups = ("관리부", "봉사부", "사회부", "선교부", "성평등부", "예배부", "친교부", "재정부")
+        else:
+            expected_mm_title = "신도회 월례회"
+            expected_box_id = "1137471996"
+            expected_groups = ("새청", "청신", "희청", "청녀", "청남", "희녀", "희남", "장녀", "장남")
+
+        today_group = next((g for g in rendered_ann_sections if g["role"] == "today"), None)
+        today_loc = f"{ann_region_sec_entry or 'Contents/section*.xml'}:today_schedule"
+        if today_group is None:
+            issues.append({
+                "check": "rule34_notice_missing",
+                "location": today_loc,
+                "detail": f"expected={expected_mm_title}",
+            })
+            issues.append({
+                "check": "rule34_box_missing",
+                "location": today_loc,
+                "detail": f"tbl_id={expected_box_id}",
+            })
+        else:
+            notice_matches = [
+                p_el
+                for p_el in today_group["paras"]
+                if is_rule34_monthly_meeting_item(_extract_direct_p_text(p_el).strip(), expected_mm_title)
+            ]
+            if len(notice_matches) == 0:
+                issues.append({
+                    "check": "rule34_notice_missing",
+                    "location": today_loc,
+                    "detail": f"expected={expected_mm_title}",
+                })
+            elif len(notice_matches) > 1:
+                issues.append({
+                    "check": "rule34_notice_duplicate",
+                    "location": today_loc,
+                    "detail": f"expected={expected_mm_title}, count={len(notice_matches)}",
+                })
+
+            box_matches = [
+                el
+                for p_el in today_group["paras"]
+                for el in p_el.iter()
+                if _xml_local_name(el) == "tbl" and el.get("id") == expected_box_id
+            ]
+            if len(box_matches) == 0:
+                issues.append({
+                    "check": "rule34_box_missing",
+                    "location": today_loc,
+                    "detail": f"tbl_id={expected_box_id}",
+                })
+            elif len(box_matches) > 1:
+                issues.append({
+                    "check": "rule34_box_duplicate",
+                    "location": today_loc,
+                    "detail": f"tbl_id={expected_box_id}, count={len(box_matches)}",
+                })
+            else:
+                box_txt = "".join(box_matches[0].itertext())
+                missing_groups = [g for g in expected_groups if g not in box_txt]
+                if missing_groups:
+                    issues.append({
+                        "check": "rule34_box_incomplete",
+                        "location": f"{ann_region_sec_entry}:tbl#{expected_box_id}",
+                        "detail": f"missing_group_count={len(missing_groups)}",
+                    })
+
+    if issues:
+        raise HwpxArtifactValidationError(issues)
 
 
 class HwpxEngine:
     """Production-grade engine for HWPX template XML tag substitution."""
 
     DEFAULT_LOGO_DIR = Path(r"C:\Users\june2\OneDrive\바탕 화면\주보인수인계\향린로고")
+    MAX_EXPORT_RETRIES: int = 20
 
     LITURGICAL_CONFIG = {
         "창조절": {
@@ -426,15 +1010,23 @@ class HwpxEngine:
             Path to the generated HWPX file.
         """
         output_file = Path(output_path)
-        output_file.parent.mkdir(parents=True, exist_ok=True)
+        prepared_data = prepare_bulletin_data(data, fallback_stem=output_file.stem)
+        fact_issues = validate_bulletin_facts_data(
+            prepared_data,
+            fallback_stem=output_file.stem,
+            check_online_scripture=False,
+        )
+        fact_errors = [iss for iss in fact_issues if iss.get("level") == "ERROR"]
+        if fact_errors:
+            raise BulletinValidationError(fact_errors)
 
-        # Rule 0 & Rule 23: 공식 성서읽기 본문 1:1 대조 하드 가드레일 (AI 임의 작문 원천 차단)
-        self._verify_official_scripture(data)
+        data = prepared_data
 
         flat_map = self.flatten_data(data)
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory() as temp_dir, tempfile.TemporaryDirectory() as stage_dir:
             temp_path = Path(temp_dir)
+            staged_hwpx = Path(stage_dir) / "staged_output.hwpx"
 
             # 1. Unpack HWPX zip
             with zipfile.ZipFile(self.template_path, 'r') as zip_ref:
@@ -551,15 +1143,36 @@ class HwpxEngine:
                         duty_header_pat = r'(<(?:\w+:)?tc\b(?:(?!</(?:\w+:)?tc>).)*?rowAddr="17"[^>]*>[\s\S]*?<(?:\w+:)?cellSz width="(?:5183|9546|9547|9554|9557)"\s*height=)"\d+"'
                         xml_text = re.sub(duty_header_pat, r'\g<1>"2739"', xml_text)
 
-                    # 건강회복 명단 2행 분리 복원 (140% 줄간격 paraPr 98, charPr 147 골든 레퍼런스 스타일)
-                    healing_1 = flat_map.get("healing_prayer_1", "")
-                    healing_2 = flat_map.get("healing_prayer_2", "")
-                    if healing_1 and healing_2:
-                        clean_healing_p1 = f'<ns1:p id="2147483648" paraPrIDRef="98" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="147"><ns1:t> {html.escape(healing_1)}</ns1:t></ns1:run></ns1:p>'
-                        clean_healing_p2 = f'<ns1:p id="0" paraPrIDRef="98" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="147"><ns1:t> {html.escape(healing_2)}</ns1:t></ns1:run></ns1:p>'
+                    # 건강회복 명단 복원 (140% 줄간격 paraPr 98, charPr 46 경기천년바탕 Regular 15.5pt)
+                    healing_1 = flat_map.get("healing_prayer_1", "").strip()
+                    healing_2 = flat_map.get("healing_prayer_2", "").strip()
+                    healing_3 = flat_map.get("healing_prayer_3", "").strip()
+                    healing_lines = [h for h in [healing_1, healing_2, healing_3] if h]
+                    if healing_lines:
+                        clean_healing_ps = []
+                        for idx, h_text in enumerate(healing_lines):
+                            pid = "2147483648" if idx == 0 else "0"
+                            clean_healing_ps.append(
+                                f'<ns1:p id="{pid}" paraPrIDRef="98" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="46"><ns1:t> {html.escape(h_text)}</ns1:t></ns1:run></ns1:p>'
+                            )
                         healing_block_pat = r'<(?:\w+:)?p\b[^>]*>(?:(?!</(?:\w+:)?p>)[\s\S])*?\{\{healing_prayer_1\}\}[\s\S]*?</(?:\w+:)?p>\s*<(?:\w+:)?p\b[^>]*>(?:(?!</(?:\w+:)?p>)[\s\S])*?\{\{healing_prayer_3\}\}[\s\S]*?</(?:\w+:)?p>'
                         if re.search(healing_block_pat, xml_text):
-                            xml_text = re.sub(healing_block_pat, f"{clean_healing_p1}\n{clean_healing_p2}", xml_text)
+                            xml_text = re.sub(healing_block_pat, "\n".join(clean_healing_ps), xml_text)
+
+                    # 해외체류 명단 복원 (140% 줄간격 paraPr 98, charPr 46 경기천년바탕 Regular 15.5pt)
+                    overseas_1 = flat_map.get("overseas_prayer_1", "").strip()
+                    overseas_2 = flat_map.get("overseas_prayer_2", "").strip()
+                    overseas_lines = [o for o in [overseas_1, overseas_2] if o]
+                    if overseas_lines:
+                        clean_overseas_ps = []
+                        for idx, o_text in enumerate(overseas_lines):
+                            pid = "2147483648" if idx == 0 else "0"
+                            clean_overseas_ps.append(
+                                f'<ns1:p id="{pid}" paraPrIDRef="98" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="46"><ns1:t> {html.escape(o_text)}</ns1:t></ns1:run></ns1:p>'
+                            )
+                        overseas_block_pat = r'<(?:\w+:)?p\b[^>]*>(?:(?!</(?:\w+:)?p>)[\s\S])*?\{\{overseas_prayer_1\}\}[\s\S]*?</(?:\w+:)?p>\s*<(?:\w+:)?p\b[^>]*>(?:(?!</(?:\w+:)?p>)[\s\S])*?\{\{overseas_prayer_2\}\}[\s\S]*?</(?:\w+:)?p>'
+                        if re.search(overseas_block_pat, xml_text):
+                            xml_text = re.sub(overseas_block_pat, "\n".join(clean_overseas_ps), xml_text)
 
                     # 하늘뜻펴기 행 우측 빈 칸 병합 (너비 34411 + 5547 = 39958, colSpan 6, 사용자 지정 서식 영구 반영)
                     sermon_merge_pat = r'(<(?:\w+:)?tc\b(?:(?!</(?:\w+:)?tc>).)*?<(?:\w+:)?cellAddr colAddr="3" rowAddr="4"[\s\S]*?</(?:\w+:)?tc>)\s*<(?:\w+:)?tc\b(?:(?!</(?:\w+:)?tc>).)*?<(?:\w+:)?cellAddr colAddr="8" rowAddr="4"[\s\S]*?</(?:\w+:)?tc>'
@@ -737,16 +1350,31 @@ class HwpxEngine:
                         else:
                             xml_text = xml_text.replace('>찬 양하게<', '>않 게하여<')
 
-                        # 교독송 마지막 마디 가사: 주(음표1), 옵(음표2), 소(음표3), 서(음표4, 이음줄 시작), -(음표5), -(음표6) 정밀 정렬
+                        # 교독송 마지막 마디 가사: 당주 후렴구 음표 1:1 정밀 정렬 (Rule 18)
+                        refrain_raw = rh.get("refrain_1", "").replace(" ", "").replace("-", "")
+                        if len(refrain_raw) >= 4:
+                            c1 = refrain_raw[0]
+                            c2 = f" {refrain_raw[1:3]}"
+                            c3 = f" {refrain_raw[3]}"
+                        elif len(refrain_raw) == 3:
+                            c1 = refrain_raw[0]
+                            c2 = f" {refrain_raw[1]}"
+                            c3 = f" {refrain_raw[2]}"
+                        else:
+                            c1, c2, c3 = "주", " 옵소", " 서"
+
                         col5_new = (
-                            '<ns1:run charPrIDRef="86"><ns1:t>주</ns1:t></ns1:run>'
-                            '<ns1:run charPrIDRef="86"><ns1:t> 옵소</ns1:t></ns1:run>'
-                            '<ns1:run charPrIDRef="87"><ns1:t> 서</ns1:t></ns1:run>'
-                            '<ns1:run charPrIDRef="87"><ns1:t>  -  -</ns1:t></ns1:run>'
-                            '<ns1:run charPrIDRef="90" />'
+                            f'<ns1:run charPrIDRef="86"><ns1:t>{c1}</ns1:t></ns1:run>'
+                            f'<ns1:run charPrIDRef="86"><ns1:t>{c2}</ns1:t></ns1:run>'
+                            f'<ns1:run charPrIDRef="87"><ns1:t>{c3}</ns1:t></ns1:run>'
+                            f'<ns1:run charPrIDRef="87"><ns1:t>  -  -</ns1:t></ns1:run>'
+                            f'<ns1:run charPrIDRef="90" />'
                         )
                         pattern_col5 = r'<(?:\w+:)?run charPrIDRef="86"><(?:\w+:)?t>하</(?:\w+:)?t></(?:\w+:)?run>[\s\S]*?<(?:\w+:)?run charPrIDRef="87"><(?:\w+:)?t>-   -</(?:\w+:)?t></(?:\w+:)?run>(?:<(?:\w+:)?run charPrIDRef="90"\s*/>)?'
                         xml_text = re.sub(pattern_col5, col5_new, xml_text)
+
+                        s3_score_word = s3_end if s3_end else "않 게하여"
+                        refrain_display = f"{c1}{c2}{c3}  -  -"
 
                         xml_text = xml_text.replace(
                             '주님이여 우리들을 -불쌍하게 여기시고주의얼굴 비추시어.그리하여 온세상이 -주님의뜻 알게하고 온나라가 주님구원. 주님이여 민족들이 -찬양하게 하옵소서 모든민족 주님에게.',
@@ -754,8 +1382,9 @@ class HwpxEngine:
                         )
                         xml_text = xml_text.replace(
                             '복을내려 주옵소서.찬 양하게  -   -  -하 옵소서 -   -알게하여 주옵소서.',
-                            f'{s1_end}않 게하여  -   -  -주 옵소 서  -  -{s2_end}'
+                            f'{s1_end}{s3_score_word}  -   -  -{refrain_display}{s2_end}'
                         )
+
 
                     # 주일 봉사자 동적 치환
                     guide_txt = flat_map.get("service_worship_guides", "김경민 강정희")
@@ -801,30 +1430,6 @@ class HwpxEngine:
                     # 4. 공동관심사 (announcements_sections) 치환
                     ann_sections = data.get("announcements_sections", [])
                     if ann_sections:
-                        # Rule 34: 매월 1주(부서 월례회) 및 2주(신도회 월례회) 누락 시 자동 보정
-                        bulletin_date_str = str(data.get("metadata", {}).get("date_compact", "")) or str(data.get("date", ""))
-                        d_m = re.search(r"(\d{4})[-.]?(\d{2})[-.]?(\d{2})", bulletin_date_str)
-                        if d_m:
-                            b_day = int(d_m.group(3))
-                            today_sec = next((s for s in ann_sections if "오늘 일정" in s.get("title", "")), None)
-                            if today_sec is not None:
-                                items_list = today_sec.setdefault("items", [])
-                                item_titles = [it.get("title", "") if isinstance(it, dict) else str(it) for it in items_list]
-                                if b_day <= 7:
-                                    if not any("부서" in t and "월례회" in t for t in item_titles):
-                                        insert_idx = 1 if (items_list and "제직회" in str(items_list[0])) else 0
-                                        items_list.insert(insert_idx, {
-                                            "title": "부서 월례회",
-                                            "content": "공동식사 후, 각 부서 공간"
-                                        })
-                                elif 8 <= b_day <= 14:
-                                    if not any("신도회" in t and "월례회" in t for t in item_titles):
-                                        insert_idx = 1 if (items_list and "제직회" in str(items_list[0])) else 0
-                                        items_list.insert(insert_idx, {
-                                            "title": "신도회 월례회",
-                                            "content": "공동식사 후, 각 신도회 모임 공간"
-                                        })
-
                         def generate_announcements_xml(sections: list) -> str:
                             p_list = []
                             for sec in sections:
@@ -965,9 +1570,10 @@ class HwpxEngine:
                                             )
                                         p_list.append(p_item)
 
-                                        # 신도회 월례회 항목 직후 신도회 장소 안내 표(박스) 자동 삽입
-                                        if i_title == "신도회 월례회":
+                                        # 신도회 월례회 항목 직후 신도회 장소 안내 표(박스) 자동 삽입 (단, 당일 '오늘 일정'일 때만)
+                                        if i_title == "신도회 월례회" and "오늘 일정" in sec_title:
                                             fellowship_box = (
+
                                                 '<ns1:p id="2147483648" paraPrIDRef="109" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">'
                                                 '<ns1:run charPrIDRef="72"><ns1:t>  </ns1:t>'
                                                 '<ns1:tbl id="1137471996" zOrder="17" numberingType="TABLE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" pageBreak="CELL" repeatHeader="1" rowCnt="1" colCnt="1" cellSpacing="0" borderFillIDRef="4" noAdjust="0">'
@@ -991,9 +1597,10 @@ class HwpxEngine:
                                             )
                                             p_list.append(fellowship_box)
 
-                                        # 부서 월례회 항목 직후 부서 장소 안내 표(박스) 자동 삽입
-                                        if i_title == "부서 월례회":
+                                        # 부서 월례회 항목 직후 부서 장소 안내 표(박스) 자동 삽입 (단, 당일 '오늘 일정'일 때만)
+                                        if i_title == "부서 월례회" and "오늘 일정" in sec_title:
                                             dept_box = (
+
                                                 '<ns1:p id="2147483648" paraPrIDRef="109" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">'
                                                 '<ns1:run charPrIDRef="72"><ns1:t>  </ns1:t>'
                                                 '<ns1:tbl id="1185698824" zOrder="16" numberingType="TABLE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" pageBreak="CELL" repeatHeader="1" rowCnt="1" colCnt="1" cellSpacing="0" borderFillIDRef="4" noAdjust="0">'
@@ -1041,13 +1648,16 @@ class HwpxEngine:
 
                     # 5. Table 10 (등록 새교우 및 기도나눔) 골든 레퍼런스 완벽 복원 (규칙 27: 140% 압축 8페이지 엄수)
                     new_members = data.get("new_members", [])
-                    healing_1 = flat_map.get("healing_prayer_1", "")
-                    healing_2 = flat_map.get("healing_prayer_2", "")
-                    military = flat_map.get("military_prayer_names", "")
-                    overseas_1 = flat_map.get("overseas_prayer_1", "")
-                    overseas_2 = flat_map.get("overseas_prayer_2", "")
+                    if isinstance(new_members, str):
+                        new_members = [new_members]
+                    healing_1 = flat_map.get("healing_prayer_1", "").strip()
+                    healing_2 = flat_map.get("healing_prayer_2", "").strip()
+                    healing_3 = flat_map.get("healing_prayer_3", "").strip()
+                    military = flat_map.get("military_prayer_names", "").strip()
+                    overseas_1 = flat_map.get("overseas_prayer_1", "").strip()
+                    overseas_2 = flat_map.get("overseas_prayer_2", "").strip()
 
-                    if new_members:
+                    if isinstance(new_members, list) and len(new_members) > 0:
                         p_t10 = []
                         # [0] 등록 새교우 헤더
                         p_t10.append('<ns1:p id="2147483648" paraPrIDRef="98" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="66"><ns1:t>▯등록 새교우 (2026)</ns1:t></ns1:run></ns1:p>')
@@ -1063,29 +1673,33 @@ class HwpxEngine:
                         p_t10.append('<ns1:p id="2147483648" paraPrIDRef="99" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="152"/></ns1:p>')
                         # 건강회복 헤더
                         p_t10.append('<ns1:p id="2147483648" paraPrIDRef="100" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="66"><ns1:t>▯건강회복을 위해</ns1:t></ns1:run></ns1:p>')
-                        # 건강회복 행들
-                        if healing_1:
-                            p_t10.append(f'<ns1:p id="2147483648" paraPrIDRef="98" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="147"><ns1:t> {html.escape(healing_1.strip())}</ns1:t></ns1:run></ns1:p>')
-                        if healing_2:
-                            p_t10.append(f'<ns1:p id="0" paraPrIDRef="98" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="147"><ns1:t> {html.escape(healing_2.strip())}</ns1:t></ns1:run></ns1:p>')
+                        # 건강회복 행들 (교인 명단 볼드 절대 금지: charPrIDRef 46 경기천년바탕 Regular 15.5pt)
+                        h_first = True
+                        for h_text in [healing_1, healing_2, healing_3]:
+                            if h_text:
+                                pid = "2147483648" if h_first else "0"
+                                p_t10.append(f'<ns1:p id="{pid}" paraPrIDRef="98" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="46"><ns1:t> {html.escape(h_text)}</ns1:t></ns1:run></ns1:p>')
+                                h_first = False
                         # 빈 줄
                         p_t10.append('<ns1:p id="2147483648" paraPrIDRef="98" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="68"/></ns1:p>')
                         # 군복무
                         p_t10.append(
                             f'<ns1:p id="2147483648" paraPrIDRef="100" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">'
                             f'<ns1:run charPrIDRef="66"><ns1:t>▯군복무 중 건강과 안전을 위해╻</ns1:t></ns1:run>'
-                            f'<ns1:run charPrIDRef="46"><ns1:t> {html.escape(military.strip())}</ns1:t></ns1:run>'
+                            f'<ns1:run charPrIDRef="46"><ns1:t> {html.escape(military)}</ns1:t></ns1:run>'
                             f'</ns1:p>'
                         )
                         # 빈 줄
                         p_t10.append('<ns1:p id="2147483648" paraPrIDRef="98" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="68"/></ns1:p>')
                         # 해외체류 헤더
                         p_t10.append('<ns1:p id="2147483648" paraPrIDRef="100" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="66"><ns1:t>▯해외 체류 중인 교우들을 위해</ns1:t></ns1:run></ns1:p>')
-                        # 해외체류 행들
-                        if overseas_1:
-                            p_t10.append(f'<ns1:p id="2147483648" paraPrIDRef="98" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="147"><ns1:t> {html.escape(overseas_1.strip())}</ns1:t></ns1:run></ns1:p>')
-                        if overseas_2:
-                            p_t10.append(f'<ns1:p id="0" paraPrIDRef="98" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="147"><ns1:t> {html.escape(overseas_2.strip())}</ns1:t></ns1:run></ns1:p>')
+                        # 해외체류 행들 (교인 명단 볼드 절대 금지: charPrIDRef 46 경기천년바탕 Regular 15.5pt)
+                        o_first = True
+                        for o_text in [overseas_1, overseas_2]:
+                            if o_text:
+                                pid = "2147483648" if o_first else "0"
+                                p_t10.append(f'<ns1:p id="{pid}" paraPrIDRef="98" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="46"><ns1:t> {html.escape(o_text)}</ns1:t></ns1:run></ns1:p>')
+                                o_first = False
 
                         t10_sublist_content = "".join(p_t10)
                         t10_pattern = r'(<(?:\w+:)?tbl\b[^>]*?id="1111275716"[^>]*>[\s\S]*?<(?:\w+:)?tc\b[^>]*>)(?:(?!</(?:\w+:)?tc>)[\s\S])*?(<(?:\w+:)?cellAddr colAddr="0" rowAddr="0"[\s\S]*?</(?:\w+:)?tbl>)'
@@ -1120,7 +1734,9 @@ class HwpxEngine:
 
                     # 공동체 교회 최신 정보 보장 (규칙 29): 들꽃향린교회 -> 희년향린교회
                     xml_text = xml_text.replace("들꽃향린교회", "희년향린교회")
-                    xml_text = xml_text.replace("서울시 강동구 천호대로 991 ☎ 02-478-9101", "서울시 송파구 올림픽로37길 130 A동 513호 ☎ 010-6432-8063")
+                    xml_text = xml_text.replace("서울시 강동구 천호대로 991 ☎ 02-478-9101", "서울시 송파구 올림픽로37길 130 파크리오A상가 513호 ☎ 010-6432-8063")
+                    xml_text = xml_text.replace("서울시 송파구 올림픽로37길 130 A동 513호 ☎ 010-6432-8063", "서울시 송파구 올림픽로37길 130 파크리오A상가 513호 ☎ 010-6432-8063")
+                    xml_text = xml_text.replace("서울 송파구 올림픽로37길 130 A동 513호", "서울 송파구 올림픽로37길 130 파크리오A상가 513호")
 
                     # Remove linesegarray cache tags to prevent Hancom Office "tampered document" false-alarm.
                     # Hancom recalculates text layouts automatically when linesegarray is absent.
@@ -1196,46 +1812,48 @@ class HwpxEngine:
 
                     h_text = re.sub(r'<hh:paraPr id="102"[\s\S]*?</hh:paraPr>', update_para_102_line_spacing, h_text)
 
-                    # 미적 조판용 미세 자간 charPr 등록 (-1% ~ -11%)
+                    # 미적 조판용 미세 자간 charPr 등록 (-1% ~ -11%) - 이미 정의된 ID는 중복 추가 금지
+                    existing_cids = set(re.findall(r'<(?:[\w]+:)?charPr\b[^>]*\bid="(\d+)"', h_text))
                     new_charpr_xml = []
                     for sp, (b_id, r_id) in self.SPACING_CID_MAP.items():
                         ratio_val = "95" if sp <= -4 else "96"
-                        # Bold
-                        new_charpr_xml.append(
-                            f'<hh:charPr id="{b_id}" height="1500" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="9">'
-                            f'<hh:fontRef hangul="3" latin="3" hanja="3" japanese="3" other="3" symbol="3" user="3"/>'
-                            f'<hh:ratio hangul="{ratio_val}" latin="{ratio_val}" hanja="{ratio_val}" japanese="{ratio_val}" other="{ratio_val}" symbol="{ratio_val}" user="{ratio_val}"/>'
-                            f'<hh:spacing hangul="{sp}" latin="{sp}" hanja="{sp}" japanese="{sp}" other="{sp}" symbol="{sp}" user="{sp}"/>'
-                            f'<hh:relSz hangul="100" latin="100" hanja="100" japanese="100" other="100" symbol="100" user="100"/>'
-                            f'<hh:offset hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>'
-                            f'<hh:bold/>'
-                            f'<hh:underline type="NONE" shape="SOLID" color="#000000"/>'
-                            f'<hh:strikeout shape="NONE" color="#000000"/>'
-                            f'<hh:outline type="NONE"/>'
-                            f'<hh:shadow type="NONE" color="#C0C0C0" offsetX="10" offsetY="10"/>'
-                            f'</hh:charPr>'
-                        )
-                        # Regular
-                        new_charpr_xml.append(
-                            f'<hh:charPr id="{r_id}" height="1500" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="9">'
-                            f'<hh:fontRef hangul="3" latin="3" hanja="3" japanese="3" other="3" symbol="3" user="3"/>'
-                            f'<hh:ratio hangul="{ratio_val}" latin="{ratio_val}" hanja="{ratio_val}" japanese="{ratio_val}" other="{ratio_val}" symbol="{ratio_val}" user="{ratio_val}"/>'
-                            f'<hh:spacing hangul="{sp}" latin="{sp}" hanja="{sp}" japanese="{sp}" other="{sp}" symbol="{sp}" user="{sp}"/>'
-                            f'<hh:relSz hangul="100" latin="100" hanja="100" japanese="100" other="100" symbol="100" user="100"/>'
-                            f'<hh:offset hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>'
-                            f'<hh:underline type="NONE" shape="SOLID" color="#000000"/>'
-                            f'<hh:strikeout shape="NONE" color="#000000"/>'
-                            f'<hh:outline type="NONE"/>'
-                            f'<hh:shadow type="NONE" color="#C0C0C0" offsetX="10" offsetY="10"/>'
-                            f'</hh:charPr>'
-                        )
-                    added_xml = "".join(new_charpr_xml)
-                    m_cnt = re.search(r'(<hh:charProperties itemCnt=")(\d+)(">)', h_text)
-                    if m_cnt:
-                        old_cnt = int(m_cnt.group(2))
-                        new_cnt = old_cnt + len(new_charpr_xml)
-                        h_text = h_text[:m_cnt.start()] + f'{m_cnt.group(1)}{new_cnt}{m_cnt.group(3)}' + h_text[m_cnt.end():]
-                    h_text = h_text.replace('</hh:charProperties>', f'{added_xml}</hh:charProperties>')
+                        if b_id not in existing_cids:
+                            new_charpr_xml.append(
+                                f'<hh:charPr id="{b_id}" height="1500" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="9">'
+                                f'<hh:fontRef hangul="3" latin="3" hanja="3" japanese="3" other="3" symbol="3" user="3"/>'
+                                f'<hh:ratio hangul="{ratio_val}" latin="{ratio_val}" hanja="{ratio_val}" japanese="{ratio_val}" other="{ratio_val}" symbol="{ratio_val}" user="{ratio_val}"/>'
+                                f'<hh:spacing hangul="{sp}" latin="{sp}" hanja="{sp}" japanese="{sp}" other="{sp}" symbol="{sp}" user="{sp}"/>'
+                                f'<hh:relSz hangul="100" latin="100" hanja="100" japanese="100" other="100" symbol="100" user="100"/>'
+                                f'<hh:offset hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>'
+                                f'<hh:bold/>'
+                                f'<hh:underline type="NONE" shape="SOLID" color="#000000"/>'
+                                f'<hh:strikeout shape="NONE" color="#000000"/>'
+                                f'<hh:outline type="NONE"/>'
+                                f'<hh:shadow type="NONE" color="#C0C0C0" offsetX="10" offsetY="10"/>'
+                                f'</hh:charPr>'
+                            )
+                        if r_id not in existing_cids:
+                            new_charpr_xml.append(
+                                f'<hh:charPr id="{r_id}" height="1500" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="9">'
+                                f'<hh:fontRef hangul="3" latin="3" hanja="3" japanese="3" other="3" symbol="3" user="3"/>'
+                                f'<hh:ratio hangul="{ratio_val}" latin="{ratio_val}" hanja="{ratio_val}" japanese="{ratio_val}" other="{ratio_val}" symbol="{ratio_val}" user="{ratio_val}"/>'
+                                f'<hh:spacing hangul="{sp}" latin="{sp}" hanja="{sp}" japanese="{sp}" other="{sp}" symbol="{sp}" user="{sp}"/>'
+                                f'<hh:relSz hangul="100" latin="100" hanja="100" japanese="100" other="100" symbol="100" user="100"/>'
+                                f'<hh:offset hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>'
+                                f'<hh:underline type="NONE" shape="SOLID" color="#000000"/>'
+                                f'<hh:strikeout shape="NONE" color="#000000"/>'
+                                f'<hh:outline type="NONE"/>'
+                                f'<hh:shadow type="NONE" color="#C0C0C0" offsetX="10" offsetY="10"/>'
+                                f'</hh:charPr>'
+                            )
+                    if new_charpr_xml:
+                        added_xml = "".join(new_charpr_xml)
+                        m_cnt = re.search(r'(<hh:charProperties itemCnt=")(\d+)(">)', h_text)
+                        if m_cnt:
+                            old_cnt = int(m_cnt.group(2))
+                            new_cnt = old_cnt + len(new_charpr_xml)
+                            h_text = h_text[:m_cnt.start()] + f'{m_cnt.group(1)}{new_cnt}{m_cnt.group(3)}' + h_text[m_cnt.end():]
+                        h_text = h_text.replace('</hh:charProperties>', f'{added_xml}</hh:charProperties>')
 
                     # 8페이지 목회마당 포스터 제거 및 배경 초기화 (텍스트 대체 시)
                     pastoral_text = str(data.get("pastoral_corner", {}).get("text", "") or data.get("pastoral_text", "")).strip()
@@ -1579,33 +2197,152 @@ class HwpxEngine:
                     hpf_text = re.sub(r'<opf:item id="image1"[^>]*/>\s*', '', hpf_text)
                     hpf_file.write_text(hpf_text, encoding="utf-8")
 
-            # 4. Repack HWPX zip strictly compliant with KS X 6101 / OCF standard
-            try:
-                with zipfile.ZipFile(output_file, 'w') as zip_out:
-                    # 1) mimetype MUST be the very first entry and stored uncompressed (ZIP_STORED)
-                    mimetype_file = temp_path / "mimetype"
-                    if mimetype_file.is_file():
-                        zip_out.write(mimetype_file, "mimetype", compress_type=zipfile.ZIP_STORED)
-                    
-                    # 2) Write other entries with standard compression (ZIP_DEFLATED)
-                    for file_item in sorted(temp_path.rglob("*")):
-                        if file_item.is_file() and file_item.name != "mimetype":
-                            arcname = file_item.relative_to(temp_path).as_posix()
-                            zip_out.write(file_item, arcname, compress_type=zipfile.ZIP_DEFLATED)
-            except PermissionError:
-                from src.utils import get_next_bulletin_version
-                base_stem = re.sub(r"_v\d+$", "", output_file.stem)
-                next_v = get_next_bulletin_version(output_file.parent, base_stem)
-                alt_output = output_file.parent / f"{base_stem}_v{next_v}{output_file.suffix}"
-                with zipfile.ZipFile(alt_output, 'w') as zip_out:
-                    mimetype_file = temp_path / "mimetype"
-                    if mimetype_file.is_file():
-                        zip_out.write(mimetype_file, "mimetype", compress_type=zipfile.ZIP_STORED)
-                    for file_item in sorted(temp_path.rglob("*")):
-                        if file_item.is_file() and file_item.name != "mimetype":
-                            arcname = file_item.relative_to(temp_path).as_posix()
-                            zip_out.write(file_item, arcname, compress_type=zipfile.ZIP_DEFLATED)
-                return alt_output
+            # 3-6. season 미지정 경로에서도 section*.xml이 미세 자간 charPr(204~219)을 참조한 경우 header.xml 누락 등록 보완
+            if not matched_cfg and contents_dir.is_dir():
+                header_file = contents_dir / "header.xml"
+                if header_file.is_file():
+                    spacing_cids = {cid for pair in self.SPACING_CID_MAP.values() for cid in pair}
+                    sec_uses_spacing = any(
+                        any(f'charPrIDRef="{cid}"' in xf.read_text(encoding="utf-8") for cid in spacing_cids)
+                        for xf in contents_dir.glob("section*.xml")
+                    )
+                    if sec_uses_spacing:
+                        h_text = header_file.read_text(encoding="utf-8")
+                        if "</hh:charProperties>" in h_text:
+                            existing_cids = set(re.findall(r'<(?:[\w]+:)?charPr\b[^>]*\bid="(\d+)"', h_text))
+                            new_charpr_xml = []
+                            for sp, (b_id, r_id) in self.SPACING_CID_MAP.items():
+                                ratio_val = "95" if sp <= -4 else "96"
+                                if b_id not in existing_cids:
+                                    new_charpr_xml.append(
+                                        f'<hh:charPr id="{b_id}" height="1500" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="9">'
+                                        f'<hh:fontRef hangul="3" latin="3" hanja="3" japanese="3" other="3" symbol="3" user="3"/>'
+                                        f'<hh:ratio hangul="{ratio_val}" latin="{ratio_val}" hanja="{ratio_val}" japanese="{ratio_val}" other="{ratio_val}" symbol="{ratio_val}" user="{ratio_val}"/>'
+                                        f'<hh:spacing hangul="{sp}" latin="{sp}" hanja="{sp}" japanese="{sp}" other="{sp}" symbol="{sp}" user="{sp}"/>'
+                                        f'<hh:relSz hangul="100" latin="100" hanja="100" japanese="100" other="100" symbol="100" user="100"/>'
+                                        f'<hh:offset hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>'
+                                        f'<hh:bold/>'
+                                        f'<hh:underline type="NONE" shape="SOLID" color="#000000"/>'
+                                        f'<hh:strikeout shape="NONE" color="#000000"/>'
+                                        f'<hh:outline type="NONE"/>'
+                                        f'<hh:shadow type="NONE" color="#C0C0C0" offsetX="10" offsetY="10"/>'
+                                        f'</hh:charPr>'
+                                    )
+                                if r_id not in existing_cids:
+                                    new_charpr_xml.append(
+                                        f'<hh:charPr id="{r_id}" height="1500" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="9">'
+                                        f'<hh:fontRef hangul="3" latin="3" hanja="3" japanese="3" other="3" symbol="3" user="3"/>'
+                                        f'<hh:ratio hangul="{ratio_val}" latin="{ratio_val}" hanja="{ratio_val}" japanese="{ratio_val}" other="{ratio_val}" symbol="{ratio_val}" user="{ratio_val}"/>'
+                                        f'<hh:spacing hangul="{sp}" latin="{sp}" hanja="{sp}" japanese="{sp}" other="{sp}" symbol="{sp}" user="{sp}"/>'
+                                        f'<hh:relSz hangul="100" latin="100" hanja="100" japanese="100" other="100" symbol="100" user="100"/>'
+                                        f'<hh:offset hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>'
+                                        f'<hh:underline type="NONE" shape="SOLID" color="#000000"/>'
+                                        f'<hh:strikeout shape="NONE" color="#000000"/>'
+                                        f'<hh:outline type="NONE"/>'
+                                        f'<hh:shadow type="NONE" color="#C0C0C0" offsetX="10" offsetY="10"/>'
+                                        f'</hh:charPr>'
+                                    )
+                            if new_charpr_xml:
+                                added_xml = "".join(new_charpr_xml)
+                                m_cnt = re.search(r'(<hh:charProperties itemCnt=")(\d+)(">)', h_text)
+                                if m_cnt:
+                                    old_cnt = int(m_cnt.group(2))
+                                    new_cnt = old_cnt + len(new_charpr_xml)
+                                    h_text = h_text[:m_cnt.start()] + f'{m_cnt.group(1)}{new_cnt}{m_cnt.group(3)}' + h_text[m_cnt.end():]
+                                h_text = h_text.replace("</hh:charProperties>", f"{added_xml}</hh:charProperties>")
+                                header_file.write_text(h_text, encoding="utf-8")
 
-        return output_file
+            # 4. Stage HWPX zip strictly compliant with KS X 6101 / OCF standard, validate artifact, then export
+            self._write_hwpx_zip(temp_path, staged_hwpx)
+            return self._export_validated_hwpx(staged_hwpx, data, output_file)
+
+    @staticmethod
+    def _write_hwpx_zip(source_dir: Path, archive_path: Path) -> None:
+        with zipfile.ZipFile(archive_path, "w") as zip_out:
+            mimetype_file = source_dir / "mimetype"
+            if mimetype_file.is_file():
+                zip_out.write(mimetype_file, "mimetype", compress_type=zipfile.ZIP_STORED)
+            for file_item in sorted(source_dir.rglob("*")):
+                if file_item.is_file() and file_item.name != "mimetype":
+                    arcname = file_item.relative_to(source_dir).as_posix()
+                    zip_out.write(file_item, arcname, compress_type=zipfile.ZIP_DEFLATED)
+
+    @staticmethod
+    def _copy_to_temp_export(src_path: Path, temp_dst_path: Path, chunk_size: int = 65536) -> None:
+        """Write complete validated HWPX bytes to an exclusive temporary file in the output directory."""
+        with open(src_path, "rb") as f_src, open(temp_dst_path, "xb") as f_dst:
+            while True:
+                chunk = f_src.read(chunk_size)
+                if not chunk:
+                    break
+                f_dst.write(chunk)
+            f_dst.flush()
+            os.fsync(f_dst.fileno())
+
+    @staticmethod
+    def _commit_temp_export_no_overwrite(temp_export: Path, target_path: Path) -> None:
+        """Commit temp_export to target_path without overwriting any existing file (never uses os.replace)."""
+        if target_path.exists():
+            raise FileExistsError(f"Output target already exists: {target_path}")
+        if os.name == "nt":
+            os.rename(temp_export, target_path)
+        else:
+            os.link(temp_export, target_path)
+            temp_export.unlink()
+
+    @staticmethod
+    def _export_validated_hwpx(
+        staged_hwpx: Path,
+        data: Dict[str, Any],
+        output_file: Path,
+        max_attempts: int = 20,
+    ) -> Path:
+        from src.utils import get_next_bulletin_version
+
+        validate_generated_hwpx(staged_hwpx, data, fallback_stem=output_file.stem)
+        output_dir = output_file.parent
+        output_dir.mkdir(parents=True, exist_ok=True)
+        temp_export = output_dir / f".{output_file.name}.tmp_{os.getpid()}_{uuid.uuid4().hex}.part"
+
+        try:
+            HwpxEngine._copy_to_temp_export(staged_hwpx, temp_export)
+
+            base_stem = re.sub(r"_v\d+$", "", output_file.stem)
+            candidate = output_file
+            next_v: int | None = None
+            attempts = 0
+
+            while True:
+                attempts += 1
+                if attempts > max_attempts:
+                    raise OSError(
+                        f"내보내기 대상 파일 확정 실패 (최대 재시도 {max_attempts}회 초과): {candidate}"
+                    )
+
+                if candidate.exists():
+                    scanned_v = get_next_bulletin_version(output_dir, base_stem)
+                    next_v = scanned_v if next_v is None else max(next_v + 1, scanned_v)
+                    candidate = output_dir / f"{base_stem}_v{next_v}{output_file.suffix}"
+                    continue
+
+                if candidate.stem != output_file.stem:
+                    validate_generated_hwpx(temp_export, data, fallback_stem=candidate.stem)
+
+                try:
+                    HwpxEngine._commit_temp_export_no_overwrite(temp_export, candidate)
+                    return candidate
+                except (FileExistsError, PermissionError) as exc:
+                    if attempts >= max_attempts:
+                        raise OSError(
+                            f"내보내기 대상 파일 확정 실패 (반복 오류로 중단, 시도 {attempts}회): {candidate}"
+                        ) from exc
+                    scanned_v = get_next_bulletin_version(output_dir, base_stem)
+                    next_v = scanned_v if next_v is None else max(next_v + 1, scanned_v)
+                    candidate = output_dir / f"{base_stem}_v{next_v}{output_file.suffix}"
+        finally:
+            if temp_export.exists():
+                try:
+                    temp_export.unlink()
+                except OSError:
+                    pass
 

@@ -2,6 +2,7 @@
 import datetime
 import re
 from typing import Any, Dict, List, Optional
+from src.parser import classify_announcement_section, extract_date_mentions, parse_explicit_date
 from .models import IssueLevel, ReviewIssue
 
 
@@ -60,7 +61,8 @@ class BulletinRuleChecker:
         self.data = data
         self.meta = data.get("metadata", {})
         self.worship = data.get("worship_1", data.get("worship", {}))
-        self.announcements = data.get("announcements_sections", [])
+        raw_sections = data.get("announcements_sections", [])
+        self.announcements = raw_sections if isinstance(raw_sections, list) else []
         self.duties = data.get("duties", {})
         self.all_texts = extract_all_texts(data)
 
@@ -166,45 +168,61 @@ class BulletinRuleChecker:
                         ))
         return issues
 
+    @staticmethod
+    def _iter_texts_with_item_iso_date(node: Any, inherited_iso: Optional[datetime.date] = None):
+        if isinstance(node, dict):
+            local_iso = inherited_iso
+            if ("title" in node or "content" in node) and isinstance(node.get("date"), str):
+                parsed = parse_explicit_date(node["date"])
+                if parsed is not None:
+                    local_iso = parsed
+            for k, v in node.items():
+                if k == "date" and isinstance(v, str):
+                    continue
+                yield from BulletinRuleChecker._iter_texts_with_item_iso_date(v, local_iso)
+        elif isinstance(node, list):
+            for elem in node:
+                yield from BulletinRuleChecker._iter_texts_with_item_iso_date(elem, inherited_iso)
+        elif isinstance(node, str):
+            yield node, inherited_iso
+
     def check_date_weekdays(self) -> List[ReviewIssue]:
-        """규칙 5: 날짜 뒤 괄호 요일이 실제 달력 요일과 일치하는지 전수 검증."""
+        """규칙 5: 날짜 뒤 괄호 요일이 실제 달력 요일과 일치하는지 전수 검증 (공통 날짜 판정기 재사용)."""
         issues = []
-        default_year = self.target_date.year if self.target_date else 2026
-        # Matches M월 D일(요일) or M/D(요일)
-        patterns = [
-            r"(\d{1,2})월\s*(\d{1,2})일\s*\(([월화수목금토일])\)",
-            r"(\d{1,2})/(\d{1,2})\s*\(([월화수목금토일])\)",
-        ]
-        for text in self.all_texts:
-            for pat in patterns:
-                for match in re.finditer(pat, text):
-                    m, d, written_w = int(match.group(1)), int(match.group(2)), match.group(3)
-                    year = default_year
-                    # 날짜 앞에 4자리 연도가 명시되어 있는지 확인 (예: 2027년 1/14(목))
-                    prefix = text[max(0, match.start() - 12):match.start()]
-                    y_match = re.search(r'(20\d{2})\s*[년./-]?\s*$', prefix)
-                    if y_match:
-                        year = int(y_match.group(1))
-                    try:
-                        cal_date = datetime.date(year, m, d)
-                        actual_w = WEEKDAYS_KOREAN[cal_date.weekday()]
-                        if written_w != actual_w:
-                            issues.append(ReviewIssue(
-                                level=IssueLevel.ERROR,
-                                category="일정/달력",
-                                location="본문 일정",
-                                title="날짜 및 요일 불일치",
-                                message=f"{year}년 {m}월 {d}일은 실제 '{actual_w}요일'인데 '({written_w})'로 잘못 적혀 있습니다.",
-                                suggestion=f"{m}월 {d}일({actual_w})"
-                            ))
-                    except ValueError:
+        for text, item_iso_date in self._iter_texts_with_item_iso_date(self.data):
+            for m in extract_date_mentions(text, self.target_date, explicit_iso_date=item_iso_date):
+                if m.written_weekday is None:
+                    continue
+                if m.status == "invalid":
+                    issues.append(ReviewIssue(
+                        level=IssueLevel.ERROR,
+                        category="일정/달력",
+                        location="본문 일정",
+                        title="유효하지 않은 날짜",
+                        message=m.reason or f"달력에 존재하지 않는 날짜입니다: {m.raw}",
+                    ))
+                elif m.status == "confirmed" and m.resolved_date is not None:
+                    actual_w = WEEKDAYS_KOREAN[m.resolved_date.weekday()]
+                    if m.written_weekday != actual_w:
                         issues.append(ReviewIssue(
                             level=IssueLevel.ERROR,
                             category="일정/달력",
                             location="본문 일정",
-                            title="유효하지 않은 날짜",
-                            message=f"달력에 존재하지 않는 날짜입니다: {year}년 {m}월 {d}일"
+                            title="날짜 및 요일 불일치",
+                            message=(
+                                f"{m.resolved_date.year}년 {m.month}월 {m.day}일은 "
+                                f"실제 '{actual_w}요일'인데 '({m.written_weekday})'로 잘못 적혀 있습니다."
+                            ),
+                            suggestion=f"{m.month}월 {m.day}일({actual_w})",
                         ))
+                elif m.status == "unconfirmed":
+                    issues.append(ReviewIssue(
+                        level=IssueLevel.WARNING,
+                        category="일정/달력",
+                        location="본문 일정",
+                        title="연도 미확정 날짜 확인 요망",
+                        message=m.reason,
+                    ))
         return issues
 
     def check_new_member_date(self) -> List[ReviewIssue]:
@@ -337,39 +355,71 @@ class BulletinRuleChecker:
         return issues
 
     def check_today_schedule_missing(self) -> List[ReviewIssue]:
-        """규칙 10: 하위 코너(에큐메니칼 등)에 당일 행사가 적혀있는데 1번 오늘 일정에 누락되었는지 확인."""
+        """규칙 10: 내부 주간/이후 일정 코너에 당일 행사가 잘못 남아 1번 오늘 일정에 누락되었는지 확인.
+        (에큐메니칼 소식, 함께 만드는 향린, 교우 소식, 감사헌금 등 날짜보다 성격이 우선하는 범주는 제외)
+        """
         issues = []
         if not self.announcements or not self.target_date:
             return issues
 
-        first_section = self.announcements[0]
+        today_section = next(
+            (
+                s for s in self.announcements
+                if isinstance(s, dict) and classify_announcement_section(s.get("title", "")) == "today"
+            ),
+            None,
+        )
         today_titles = []
         today_text_blob_parts = []
-        for item in first_section.get("items", []):
-            if isinstance(item, dict):
-                today_titles.append(item.get("title", ""))
-                today_text_blob_parts.append(item.get("title", "") + " " + item.get("content", ""))
-            else:
-                today_text_blob_parts.append(str(item))
+        if today_section is not None:
+            raw_today_items = today_section.get("items", [])
+            for item in (raw_today_items if isinstance(raw_today_items, list) else []):
+                if isinstance(item, dict):
+                    today_titles.append(str(item.get("title", "")))
+                    today_text_blob_parts.append(str(item.get("title", "")) + " " + str(item.get("content", "")))
+                else:
+                    today_text_blob_parts.append(str(item))
 
         today_text_blob = " ".join(today_text_blob_parts)
         target_m_d = f"{self.target_date.month}월 {self.target_date.day}일"
-        target_slash = f"{self.target_date.month}/{self.target_date.day}"
 
-        # Search in other sections
-        for section in self.announcements[1:]:
-            sec_title = section.get("title", "")
-            for item in section.get("items", []):
+        non_date_moving_roles = {"ecumenical", "together", "member_news", "offering"}
+        ecumenical_markers = (
+            "노회", "시찰", "종로시찰", "NCCK", "한국기독교교회협의회", "한국그리스도교",
+            "신앙과직제", "일치포럼", "공동행동", "촛불교회", "민중법정",
+            "길목인의 날", "향린공동체협의회", "이웃 종교인", "이웃종교인", "종교 대화",
+        )
+
+        # Search only in date-moving internal schedule sections (never assuming announcements[0] is today)
+        for section in self.announcements:
+            if not isinstance(section, dict) or section is today_section:
+                continue
+            sec_title = str(section.get("title", ""))
+            sec_role = classify_announcement_section(sec_title)
+            if sec_role in non_date_moving_roles:
+                continue
+
+            raw_items = section.get("items", [])
+            for item in (raw_items if isinstance(raw_items, list) else []):
                 if isinstance(item, dict):
-                    it_title = item.get("title", "")
-                    it_content = item.get("content", "")
+                    it_title = str(item.get("title", ""))
+                    it_content = str(item.get("content", ""))
+                    item_iso = parse_explicit_date(item.get("date")) if isinstance(item.get("date"), str) else None
                 else:
                     it_title = ""
                     it_content = str(item)
+                    item_iso = None
 
                 combined = it_title + " " + it_content
+                if any(kw in combined for kw in ecumenical_markers):
+                    continue
 
-                if ("오늘" in combined or target_m_d in combined or target_slash in combined) and ("예배" in combined or "모임" in combined or "행사" in combined or "회의" in combined):
+                mentions = extract_date_mentions(combined, self.target_date, explicit_iso_date=item_iso)
+                has_today_date = ("오늘" in combined) or any(
+                    m.status == "confirmed" and not m.is_historical_ref and m.resolved_date == self.target_date
+                    for m in mentions
+                )
+                if has_today_date and ("예배" in combined or "모임" in combined or "행사" in combined or "회의" in combined):
                     # Check if it is represented in today's section
                     if it_title and it_title not in today_titles and it_title not in today_text_blob:
                         issues.append(ReviewIssue(

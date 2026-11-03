@@ -2,6 +2,7 @@
 import argparse
 import glob
 from pathlib import Path
+import re
 import sys
 
 # Ensure repository root is on sys.path
@@ -39,21 +40,30 @@ def main():
 
     input_path = Path(args.input_file) if args.input_file else find_latest_input_file()
     print(f"🔍 주보 데이터 로드 중: {input_path}")
-    current_data = load_bulletin_data(input_path)
+    current_data = load_bulletin_data(input_path, validate=False)
+
+    raw_text = ""
+    m = re.search(r"(\d{4})(\d{2})(\d{2})", input_path.name)
+    if m:
+        potential_raw = input_path.parent / f"{m.group(1)}-{m.group(2)}-{m.group(3)}_주보원고.md"
+        if potential_raw.is_file():
+            raw_text = potential_raw.read_text(encoding="utf-8")
 
     prev_week_data = None
     if args.prev_week:
-        prev_week_data = load_bulletin_data(args.prev_week)
+        prev_week_data = load_bulletin_data(args.prev_week, validate=False)
 
     prev_ver_data = None
     if args.prev_version:
-        prev_ver_data = load_bulletin_data(args.prev_version)
+        prev_ver_data = load_bulletin_data(args.prev_version, validate=False)
 
     reviewer = BulletinReviewer(
         current_data=current_data,
         prev_bulletin_data=prev_week_data,
         prev_version_data=prev_ver_data,
-        version_label=args.version_label
+        version_label=args.version_label,
+        raw_text=raw_text,
+        fallback_stem=input_path.stem,
     )
 
     report = reviewer.run_review()
@@ -71,6 +81,9 @@ def main():
         report_path = out_dir / f"[검토보고서] {report.target_date.replace(' ', '_')}.md"
         report_path.write_text(formatted, encoding="utf-8")
         print(f"\n📄 검토 보고서 저장 완료: {report_path}")
+
+    if report.error_count > 0:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
