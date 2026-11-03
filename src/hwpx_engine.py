@@ -91,6 +91,26 @@ def _norm_ws(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _get_image_bytes_size(raw_bytes: bytes) -> tuple[int, int] | None:
+    """Extract (width, height) in pixels from raw image bytes without external dependencies."""
+    try:
+        from PIL import Image
+        import io
+        with Image.open(io.BytesIO(raw_bytes)) as img:
+            return img.size
+    except Exception:
+        pass
+
+    if len(raw_bytes) >= 24 and raw_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        import struct
+        return struct.unpack(">II", raw_bytes[16:24])
+    if len(raw_bytes) >= 26 and raw_bytes.startswith(b"BM"):
+        import struct
+        w, h = struct.unpack("<ii", raw_bytes[18:26])
+        return (abs(w), abs(h))
+    return None
+
+
 def validate_generated_hwpx(
     hwpx_path: Path | str,
     data: Dict[str, Any],
@@ -151,6 +171,14 @@ def validate_generated_hwpx(
                     "location": sec_entry,
                     "detail": f"line={exc.lineno}, col={exc.offset}",
                 })
+
+        bindata_raw: Dict[str, bytes] = {}
+        for n in names:
+            if n.startswith("BinData/"):
+                try:
+                    bindata_raw[n] = zf.read(n)
+                except Exception:
+                    pass
 
         if issues or header_root is None:
             raise HwpxArtifactValidationError(issues)
@@ -587,6 +615,175 @@ def validate_generated_hwpx(
                         "detail": f"missing_group_count={len(missing_groups)}",
                     })
 
+    # 7. Logo dimension, aspect ratio & rendering matrix verification (Rule 11)
+    has_image3 = any(re.fullmatch(r"BinData/image3\.[a-zA-Z0-9]+", n) for n in names)
+    has_image4 = any(re.fullmatch(r"BinData/image4\.[a-zA-Z0-9]+", n) for n in names)
+
+    if has_image3 or has_image4:
+        season_val = str(data.get("metadata", {}).get("season", "") or data.get("season", "") or "")
+        matched_lit_cfg = None
+        for s_key, s_cfg in HwpxEngine.LITURGICAL_CONFIG.items():
+            if s_key in season_val:
+                matched_lit_cfg = s_cfg
+                break
+
+        pic_by_img_ref: Dict[str, Any] = {}
+        sec_by_img_ref: Dict[str, str] = {}
+        for sec_name, sec_root in parsed_sections:
+            for p_el in sec_root.iter():
+                if _xml_local_name(p_el) == "pic":
+                    for sub in p_el.iter():
+                        if _xml_local_name(sub) == "img":
+                            b_ref = sub.get("binaryItemIDRef")
+                            if b_ref in ("image3", "image4") and b_ref not in pic_by_img_ref:
+                                pic_by_img_ref[b_ref] = p_el
+                                sec_by_img_ref[b_ref] = sec_name
+
+        for img_ref in ["image3", "image4"]:
+            bin_entry = next((n for n in names if re.fullmatch(rf"BinData/{img_ref}\.[a-zA-Z0-9]+", n)), None)
+            if not bin_entry and img_ref not in pic_by_img_ref:
+                continue
+
+            loc_label = f"{sec_by_img_ref.get(img_ref, 'Contents/section0.xml')}:pic[{img_ref}]"
+
+            if not bin_entry:
+                issues.append({
+                    "check": "logo_file_missing",
+                    "location": f"BinData/{img_ref}",
+                    "detail": f"BinData entry for {img_ref} is missing",
+                })
+                continue
+
+            raw_bytes = bindata_raw.get(bin_entry)
+            if not raw_bytes:
+                issues.append({
+                    "check": "logo_file_missing",
+                    "location": f"BinData/{img_ref}",
+                    "detail": f"BinData entry for {img_ref} is empty or missing",
+                })
+                continue
+            img_size = _get_image_bytes_size(raw_bytes)
+            if not img_size:
+                issues.append({
+                    "check": "logo_image_unreadable",
+                    "location": bin_entry,
+                    "detail": "failed to decode logo image dimensions",
+                })
+                continue
+
+            img_w, img_h = img_size
+
+            pic_el = pic_by_img_ref.get(img_ref)
+            if pic_el is None:
+                issues.append({
+                    "check": "logo_pic_missing",
+                    "location": loc_label,
+                    "detail": f"no pic element referencing {img_ref}",
+                })
+                continue
+
+            sz_el = next((el for el in pic_el.iter() if _xml_local_name(el) == "sz"), None)
+            cur_sz_el = next((el for el in pic_el.iter() if _xml_local_name(el) == "curSz"), None)
+            org_sz_el = next((el for el in pic_el.iter() if _xml_local_name(el) == "orgSz"), None)
+            sca_el = next((el for el in pic_el.iter() if _xml_local_name(el) == "scaMatrix"), None)
+
+            if sz_el is None or cur_sz_el is None or org_sz_el is None or sca_el is None:
+                issues.append({
+                    "check": "logo_pic_incomplete",
+                    "location": loc_label,
+                    "detail": "missing required sizing or matrix tags in pic",
+                })
+                continue
+
+            try:
+                cur_w, cur_h = int(cur_sz_el.get("width", 0)), int(cur_sz_el.get("height", 0))
+                sz_w, sz_h = int(sz_el.get("width", 0)), int(sz_el.get("height", 0))
+                org_w, org_h = int(org_sz_el.get("width", 0)), int(org_sz_el.get("height", 0))
+                e1, e5 = float(sca_el.get("e1", 0.0)), float(sca_el.get("e5", 0.0))
+            except (ValueError, TypeError) as conv_err:
+                issues.append({
+                    "check": "logo_pic_invalid_attributes",
+                    "location": loc_label,
+                    "detail": str(conv_err),
+                })
+                continue
+
+            # Determine expected target size based on image and season (Rule 11)
+            known_targets = {
+                "image3": {
+                    (336, 482): (5437, 7800),     # 창조절 / 주현절 심볼
+                    (251, 283): (7007, 7899),     # 성령강림절 심볼
+                    (293, 351): (round(7500 * 293 / 351), 7500),  # 사순절 / 대림절 심볼
+                    (275, 321): (round(7500 * 275 / 321), 7500),  # 성탄절 / 부활절 심볼
+                },
+                "image4": {
+                    (1084, 373): (18018, 6200),   # 창조절 / 주현절 글씨
+                    (700, 207): (20542, 6080),    # 성령강림절 글씨
+                    (704, 197): (round(5800 * 704 / 197), 5800),  # 사순절 / 대림절 글씨
+                    (700, 197): (round(5800 * 700 / 197), 5800),  # 성탄절 / 부활절 글씨
+                },
+            }
+            known_map = known_targets.get(img_ref, {})
+            if (img_w, img_h) in known_map:
+                exp_w, exp_h = known_map[(img_w, img_h)]
+            elif matched_lit_cfg:
+                if img_ref == "image3":
+                    target_sz = matched_lit_cfg.get("symbol_target_sz")
+                    if not target_sz:
+                        max_h = 7500
+                        exp_w = round(max_h * img_w / img_h)
+                        target_sz = (exp_w, max_h)
+                else:
+                    target_sz = matched_lit_cfg.get("text_target_sz")
+                    if not target_sz:
+                        max_h = 5800
+                        exp_w = round(max_h * img_w / img_h)
+                        target_sz = (exp_w, max_h)
+                exp_w, exp_h = target_sz
+            else:
+                max_h = 7500 if img_ref == "image3" else 5800
+                exp_w, exp_h = (round(max_h * img_w / img_h), max_h)
+
+            # 1. Size match check (with tolerance up to 2 units for rounding)
+            if abs(cur_w - exp_w) > 2 or abs(cur_h - exp_h) > 2 or abs(sz_w - exp_w) > 2 or abs(sz_h - exp_h) > 2:
+                issues.append({
+                    "check": "logo_size_mismatch",
+                    "location": loc_label,
+                    "detail": f"expected={exp_w}x{exp_h}, got_cur={cur_w}x{cur_h}, got_sz={sz_w}x{sz_h}",
+                })
+
+            # 2. orgSz match check (img_px * 75)
+            exp_org_w = img_w * 75
+            exp_org_h = img_h * 75
+            if abs(org_w - exp_org_w) > 30 or abs(org_h - exp_org_h) > 30:
+                issues.append({
+                    "check": "logo_orgsz_mismatch",
+                    "location": loc_label,
+                    "detail": f"expected={exp_org_w}x{exp_org_h}, got={org_w}x{org_h}",
+                })
+
+            # 3. scaMatrix match check
+            if exp_org_w > 0 and exp_org_h > 0:
+                exp_e1 = exp_w / exp_org_w
+                exp_e5 = exp_h / exp_org_h
+                if abs(e1 - exp_e1) > 0.005 or abs(e5 - exp_e5) > 0.005:
+                    issues.append({
+                        "check": "logo_matrix_mismatch",
+                        "location": loc_label,
+                        "detail": f"expected=({exp_e1:.6f},{exp_e5:.6f}), got=({e1:.6f},{e5:.6f})",
+                    })
+
+            # 4. Aspect Ratio check
+            if cur_h > 0 and exp_h > 0:
+                rendered_ratio = cur_w / cur_h
+                exp_ratio = exp_w / exp_h
+                if abs(rendered_ratio - exp_ratio) > 0.01:
+                    issues.append({
+                        "check": "logo_ratio_distortion",
+                        "location": loc_label,
+                        "detail": f"expected_ratio={exp_ratio:.3f}, rendered_ratio={rendered_ratio:.3f}",
+                    })
+
     if issues:
         raise HwpxArtifactValidationError(issues)
 
@@ -795,7 +992,11 @@ class HwpxEngine:
             flat_map["worship_gospel"] = str(worship.get("gospel", ""))
             flat_map["복음서읽기"] = flat_map["worship_gospel"]
 
-            flat_map["worship_sermon_title"] = str(worship.get("sermon_title", ""))
+            sermon_title_raw = str(worship.get("sermon_title", "")).strip()
+            # 템플릿의 “{{worship_sermon_title}}” 태그에 이미 따옴표가 포함되어 있으므로 외곽 따옴표 자동 정규화
+            if (sermon_title_raw.startswith(('“', '"', "'")) and sermon_title_raw.endswith(('”', '"', "'"))):
+                sermon_title_raw = sermon_title_raw[1:-1].strip()
+            flat_map["worship_sermon_title"] = sermon_title_raw
             flat_map["설교제목"] = flat_map["worship_sermon_title"]
             flat_map["하늘뜻펴기_제목"] = flat_map["worship_sermon_title"]
 
@@ -932,6 +1133,19 @@ class HwpxEngine:
         pic_xml = re.sub(r'(<(?:\w+:)?imgDim\b[^>]*dimwidth=")\d+("[^>]*dimheight=")\d+(")', rf'\g<1>{org_w}\g<2>{org_h}\g<3>', pic_xml)
 
         return pic_xml
+
+    @staticmethod
+    def _get_image_size(img_path: Path) -> tuple[int, int]:
+        """Get (width, height) in pixels from an image file; raises ValueError on failure."""
+        try:
+            raw = img_path.read_bytes()
+        except OSError as exc:
+            raise ValueError(f"로고 이미지 파일을 읽을 수 없습니다 ({img_path.name}): {exc}") from exc
+
+        size = _get_image_bytes_size(raw)
+        if not size or size[0] <= 0 or size[1] <= 0:
+            raise ValueError(f"로고 이미지 크기 판독 실패 ({img_path.name}): 이미지 형식이 올바르지 않거나 손상되었습니다.")
+        return size
 
     def _verify_official_scripture(self, data: Dict[str, Any]) -> None:
         """Verify that responsive_scripture matches official homepage scripture (Rule 0).
@@ -1879,49 +2093,40 @@ class HwpxEngine:
                     logo_specs = {}
                     if sym_file.is_file():
                         shutil.copy2(sym_file, bindata_dir / "image3.png")
-                        try:
-                            from PIL import Image
-                            with Image.open(sym_file) as img:
-                                w, h = img.size
-                                target_sz = matched_cfg.get("symbol_target_sz")
-                                if not target_sz:
-                                    max_h = 7500
-                                    target_w = round(max_h * w / h)
-                                    target_sz = (target_w, max_h)
-                                logo_specs["image3"] = {
-                                    "px_w": w,
-                                    "px_h": h,
-                                    "target_w": target_sz[0],
-                                    "target_h": target_sz[1],
-                                }
-                        except Exception:
-                            pass
+                        w, h = self._get_image_size(sym_file)
+                        target_sz = matched_cfg.get("symbol_target_sz")
+                        if not target_sz:
+                            max_h = 7500
+                            target_w = round(max_h * w / h)
+                            target_sz = (target_w, max_h)
+                        logo_specs["image3"] = {
+                            "px_w": w,
+                            "px_h": h,
+                            "target_w": target_sz[0],
+                            "target_h": target_sz[1],
+                        }
 
                     if txt_file.is_file():
                         shutil.copy2(txt_file, bindata_dir / "image4.png")
-                        try:
-                            from PIL import Image
-                            with Image.open(txt_file) as img:
-                                w, h = img.size
-                                target_sz = matched_cfg.get("text_target_sz")
-                                if not target_sz:
-                                    max_h = 5800
-                                    target_w = round(max_h * w / h)
-                                    target_sz = (target_w, max_h)
-                                logo_specs["image4"] = {
-                                    "px_w": w,
-                                    "px_h": h,
-                                    "target_w": target_sz[0],
-                                    "target_h": target_sz[1],
-                                }
-                        except Exception:
-                            pass
+                        w, h = self._get_image_size(txt_file)
+                        target_sz = matched_cfg.get("text_target_sz")
+                        if not target_sz:
+                            max_h = 5800
+                            target_w = round(max_h * w / h)
+                            target_sz = (target_w, max_h)
+                        logo_specs["image4"] = {
+                            "px_w": w,
+                            "px_h": h,
+                            "target_w": target_sz[0],
+                            "target_h": target_sz[1],
+                        }
 
                     # Update exact dimensions, matrix, and clip in section*.xml to ensure 100% distortion-free rendering
                     if logo_specs:
-                        for xml_file in contents_dir.glob("section*.xml"):
-                            s_text = xml_file.read_text(encoding="utf-8")
-                            for img_ref, spec in logo_specs.items():
+                        for img_ref, spec in logo_specs.items():
+                            matched_pic_count = 0
+                            for xml_file in contents_dir.glob("section*.xml"):
+                                s_text = xml_file.read_text(encoding="utf-8")
                                 pic_pat = rf'(<(?:\w+:)?pic\b(?:(?!</(?:\w+:)?pic>).)*?binaryItemIDRef="{img_ref}".*?</(?:\w+:)?pic>)'
                                 p_m = re.search(pic_pat, s_text, flags=re.DOTALL)
                                 if p_m:
@@ -1934,40 +2139,10 @@ class HwpxEngine:
                                         spec["target_h"]
                                     )
                                     s_text = s_text.replace(orig_pic, updated_pic)
-
-                            # 절기별 목표 규격(창조절/주현절 5437x7800, 18018x6200 등) 강제 동기화 (Rule 11)
-                            sym_target_sz = matched_cfg.get("symbol_target_sz")
-                            txt_target_sz = matched_cfg.get("text_target_sz")
-                            if sym_target_sz and txt_target_sz:
-                                # 1. 심볼 로고 치환 (가로 7007->5437, 세로 7800, orgSz 25200x36150, scaMatrix 0.215754, imgRect 25200x36150)
-                                def fix_sym(m):
-                                    chunk = m.group(0)
-                                    chunk = re.sub(r'curSz width="\d+" height="\d+"', f'curSz width="{sym_target_sz[0]}" height="{sym_target_sz[1]}"', chunk)
-                                    chunk = re.sub(r'sz width="\d+" widthRelTo="ABSOLUTE" height="\d+"', f'sz width="{sym_target_sz[0]}" widthRelTo="ABSOLUTE" height="{sym_target_sz[1]}"', chunk)
-                                    chunk = re.sub(r'orgSz width="\d+" height="\d+"', 'orgSz width="25200" height="36150"', chunk)
-                                    chunk = re.sub(r'scaMatrix e1="[\d\.]+" e2="0" e3="0" e4="0" e5="[\d\.]+"', 'scaMatrix e1="0.215754" e2="0" e3="0" e4="0" e5="0.215768"', chunk)
-                                    chunk = re.sub(r'rotationInfo angle="0" centerX="\d+" centerY="\d+"', 'rotationInfo angle="0" centerX="2718" centerY="3900"', chunk)
-                                    chunk = re.sub(r'(<(?:\w+:)?imgRect>\s*<(?:\w+:)?pt0 x="0" y="0"/>\s*<(?:\w+:)?pt1 x=)"\d+" y="0"/>\s*<(?:\w+:)?pt2 x="\d+" y=)"\d+"(/>\s*<(?:\w+:)?pt3 x="0" y=)"\d+"', r'\g<1>"25200" y="0"/>\s*<hc:pt2 x="25200" y="36150"\g<3>"36150"', chunk)
-                                    chunk = re.sub(r'imgClip left="0" right="\d+" top="0" bottom="\d+"', 'imgClip left="0" right="25200" top="0" bottom="36180"', chunk)
-                                    chunk = re.sub(r'imgDim dimwidth="\d+" dimheight="\d+"', 'imgDim dimwidth="25200" dimheight="36180"', chunk)
-                                    return chunk
-                                s_text = re.sub(r'<(?:\w+:)?pic\b[^>]*>(?:(?!</(?:\w+:)?pic>).)*?(?:width="7007"|향린교회 로고 \(빨간색\) - 복사본 - 복사본).*?</(?:\w+:)?pic>', fix_sym, s_text, flags=re.DOTALL)
-
-                                # 2. 글씨 로고 치환 (가로 20542->18018, 세로 6200, orgSz 81300x27975, scaMatrix 0.221624, imgRect 81300x27975)
-                                def fix_txt(m):
-                                    chunk = m.group(0)
-                                    chunk = re.sub(r'curSz width="\d+" height="\d+"', f'curSz width="{txt_target_sz[0]}" height="{txt_target_sz[1]}"', chunk)
-                                    chunk = re.sub(r'sz width="\d+" widthRelTo="ABSOLUTE" height="\d+"', f'sz width="{txt_target_sz[0]}" widthRelTo="ABSOLUTE" height="{txt_target_sz[1]}"', chunk)
-                                    chunk = re.sub(r'orgSz width="\d+" height="\d+"', 'orgSz width="81300" height="27975"', chunk)
-                                    chunk = re.sub(r'scaMatrix e1="[\d\.]+" e2="0" e3="0" e4="0" e5="[\d\.]+"', 'scaMatrix e1="0.221624" e2="0" e3="0" e4="0" e5="0.221626"', chunk)
-                                    chunk = re.sub(r'rotationInfo angle="0" centerX="\d+" centerY="\d+"', 'rotationInfo angle="0" centerX="9009" centerY="3100"', chunk)
-                                    chunk = re.sub(r'(<(?:\w+:)?imgRect>\s*<(?:\w+:)?pt0 x="0" y="0"/>\s*<(?:\w+:)?pt1 x=)"\d+" y="0"/>\s*<(?:\w+:)?pt2 x="\d+" y=)"\d+"(/>\s*<(?:\w+:)?pt3 x="0" y=)"\d+"', r'\g<1>"81300" y="0"/>\s*<hc:pt2 x="81300" y="27975"\g<3>"27975"', chunk)
-                                    chunk = re.sub(r'imgClip left="0" right="\d+" top="0" bottom="\d+"', 'imgClip left="0" right="81300" top="0" bottom="27960"', chunk)
-                                    chunk = re.sub(r'imgDim dimwidth="\d+" dimheight="\d+"', 'imgDim dimwidth="81300" dimheight="27960"', chunk)
-                                    return chunk
-                                s_text = re.sub(r'<(?:\w+:)?pic\b[^>]*>(?:(?!</(?:\w+:)?pic>).)*?(?:width="20542"|향린교회 로고 \(빨간색\) - 복사본\.png).*?</(?:\w+:)?pic>', fix_txt, s_text, flags=re.DOTALL)
-
-                            xml_file.write_text(s_text, encoding="utf-8")
+                                    xml_file.write_text(s_text, encoding="utf-8")
+                                    matched_pic_count += 1
+                            if matched_pic_count == 0:
+                                raise ValueError(f"HWPX 본문에서 로고 그림 개체({img_ref})를 찾을 수 없어 크기를 조정하지 못했습니다.")
 
             # 3-3. Cover photo handling (사진이 없으면 파일과 그림 개체 완전 제거, 틀 비율 유지)
             cover_photo_path = flat_map.get("cover_photo", "") or data.get("metadata", {}).get("cover_photo", "")

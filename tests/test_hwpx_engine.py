@@ -84,6 +84,21 @@ class TestHwpxEngine(unittest.TestCase):
             '</hh:head>'
         )
 
+    @staticmethod
+    def _create_synthetic_png(width: int, height: int) -> bytes:
+        import zlib
+        import struct
+        sig = b"\x89PNG\r\n\x1a\n"
+        ihdr_data = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+        ihdr_crc = struct.pack(">I", zlib.crc32(b"IHDR" + ihdr_data) & 0xFFFFFFFF)
+        ihdr = struct.pack(">I", len(ihdr_data)) + b"IHDR" + ihdr_data + ihdr_crc
+        raw_pixel_data = b"\x00" + (b"\x00\x00\x00\x00" * width)
+        compressed = zlib.compress(raw_pixel_data * height)
+        idat_crc = struct.pack(">I", zlib.crc32(b"IDAT" + compressed) & 0xFFFFFFFF)
+        idat = struct.pack(">I", len(compressed)) + b"IDAT" + compressed + idat_crc
+        iend = struct.pack(">I", 0) + b"IEND" + struct.pack(">I", zlib.crc32(b"IEND") & 0xFFFFFFFF)
+        return sig + ihdr + idat + iend
+
     @classmethod
     def _write_synthetic_hwpx_fixture(
         cls,
@@ -92,6 +107,8 @@ class TestHwpxEngine(unittest.TestCase):
         include_ann_boundary: bool = True,
         include_table10: bool = True,
         include_healing3_slot: bool = True,
+        include_logos: bool = False,
+        extra_bindata: dict[str, bytes] | None = None,
         extra_section_xml: str = "",
         raw_section_xml: str | None = None,
         raw_header_xml: str | None = None,
@@ -148,6 +165,23 @@ class TestHwpxEngine(unittest.TestCase):
                     '</ns1:tbl>'
                     '</ns1:run></ns1:p>'
                 )
+            if include_logos:
+                parts.extend([
+                    '<ns1:p id="0" paraPrIDRef="0"><ns1:run charPrIDRef="0">'
+                    '<ns1:pic id="1111275668" zOrder="2" numberingType="PICTURE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="37533845" reverse="0">'
+                    '<ns1:orgSz width="18840" height="21240"/><ns1:curSz width="7007" height="7898"/>'
+                    '<ns1:renderingInfo><ns2:scaMatrix e1="0.371921" e2="0" e3="0" e4="0" e5="0.371893" e6="0"/></ns1:renderingInfo>'
+                    '<ns2:img binaryItemIDRef="image3"/>'
+                    '<ns1:sz width="7007" widthRelTo="ABSOLUTE" height="7899" heightRelTo="ABSOLUTE" protect="0"/>'
+                    '</ns1:pic></ns1:run></ns1:p>',
+                    '<ns1:p id="0" paraPrIDRef="0"><ns1:run charPrIDRef="0">'
+                    '<ns1:pic id="1111275670" zOrder="1" numberingType="PICTURE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="37533847" reverse="0">'
+                    '<ns1:orgSz width="52500" height="15540"/><ns1:curSz width="20542" height="6080"/>'
+                    '<ns1:renderingInfo><ns2:scaMatrix e1="0.391276" e2="0" e3="0" e4="0" e5="0.391248" e6="0"/></ns1:renderingInfo>'
+                    '<ns2:img binaryItemIDRef="image4"/>'
+                    '<ns1:sz width="20542" widthRelTo="ABSOLUTE" height="6080" heightRelTo="ABSOLUTE" protect="0"/>'
+                    '</ns1:pic></ns1:run></ns1:p>',
+                ])
             if extra_section_xml:
                 parts.append(extra_section_xml)
             parts.append("</ns1:sec>")
@@ -157,6 +191,16 @@ class TestHwpxEngine(unittest.TestCase):
             z.writestr("mimetype", "application/hwp+zip", compress_type=zipfile.ZIP_STORED)
             z.writestr("Contents/header.xml", header_xml.encode("utf-8"))
             z.writestr("Contents/section0.xml", section_xml.encode("utf-8"))
+            written_bin = set()
+            if extra_bindata:
+                for b_name, b_bytes in extra_bindata.items():
+                    z.writestr(b_name, b_bytes)
+                    written_bin.add(b_name)
+            if include_logos:
+                if "BinData/image3.png" not in written_bin:
+                    z.writestr("BinData/image3.png", cls._create_synthetic_png(251, 283))
+                if "BinData/image4.png" not in written_bin:
+                    z.writestr("BinData/image4.png", cls._create_synthetic_png(700, 207))
         return dest_path
 
     def test_hwpx_flattening(self):
@@ -1304,6 +1348,120 @@ class TestHwpxEngine(unittest.TestCase):
             self.assertLessEqual(len(cli_attempts), 20)
             self.assertEqual(base_hwpx.read_bytes(), sentinel_bytes)
             self.assertEqual(list(out_dir.glob("*.part")), [])
+
+    def test_stage3b_logo_gate_aspect_ratio_and_error_handling(self):
+        """1면 로고 2종(심볼, 글씨) 왜곡 방지 및 검증 게이트 회귀 테스트:
+        1) Pillow 부재 환경에서도 정상 생성
+        2) 손상 이미지 크기 판독 실패 시 명시적 오류 차단 및 기존 파일 보존
+        3) 이미지 교체 후 이전 크기·배율이 잔존한 경우 최종 산출물 게이트 차단
+        4) 지원하는 절기별(창조절, 성령강림절, 사순절) 정상 로고 규격 통과
+        """
+        import sys
+        from unittest.mock import patch
+        from lxml import etree
+        from src.hwpx_engine import HwpxEngine, validate_generated_hwpx, HwpxArtifactValidationError
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            tpl = self._write_synthetic_hwpx_fixture(tmp / "tpl_with_logos.hwpx", include_logos=True)
+
+            payload_creation = {
+                "metadata": {"date_compact": "20261101", "season": "창조절"},
+                "worship_1": {"sermon_title": "가상설교"},
+                "announcements_sections": self._canonical_6tier([{"title": "가상모임", "content": "11/01(일) 13:00"}]),
+            }
+
+            # 1. Pillow 부재 환경(sys.modules['PIL']=None)에서도 표준 PNG 헤더로 정상 크기 판독 및 HWPX 생성
+            logo_dir_creation = tmp / "logos_creation"
+            logo_dir_creation.mkdir()
+            (logo_dir_creation / "주현절, 창조절 (1).png").write_bytes(self._create_synthetic_png(336, 482))
+            (logo_dir_creation / "주현절, 창조절 (2).png").write_bytes(self._create_synthetic_png(1084, 373))
+
+            out_creation = tmp / "out_creation.hwpx"
+            with patch.dict(sys.modules, {"PIL": None, "PIL.Image": None}):
+                eng_no_pil = HwpxEngine(tpl, logo_dir=logo_dir_creation)
+                saved_hwpx = eng_no_pil.generate(payload_creation, out_creation)
+
+            self.assertTrue(saved_hwpx.is_file())
+            with zipfile.ZipFile(saved_hwpx) as z_check:
+                sec0_xml = z_check.read("Contents/section0.xml").decode("utf-8")
+                # Rule 11 창조절 목표 규격 검증
+                self.assertIn('curSz width="5437" height="7800"', sec0_xml)
+                self.assertIn('curSz width="18018" height="6200"', sec0_xml)
+                self.assertIn('orgSz width="25200" height="36150"', sec0_xml)
+                self.assertIn('orgSz width="81300" height="27975"', sec0_xml)
+
+            # 2. 이미지 판독 실패 시 조용히 넘어가지 않고 명시적 ValueError로 차단 및 기존 파일 보존
+            corrupt_logo_dir = tmp / "logos_corrupt"
+            corrupt_logo_dir.mkdir()
+            (corrupt_logo_dir / "주현절, 창조절 (1).png").write_bytes(b"CORRUPTED_NOT_A_PNG_DATA")
+            (corrupt_logo_dir / "주현절, 창조절 (2).png").write_bytes(self._create_synthetic_png(1084, 373))
+
+            existing_file = tmp / "existing_protected.hwpx"
+            sentinel_bytes = b"ORIGINAL_BYTES_PRESERVED"
+            existing_file.write_bytes(sentinel_bytes)
+
+            eng_corrupt = HwpxEngine(tpl, logo_dir=corrupt_logo_dir)
+            with self.assertRaises(ValueError) as err_ctx:
+                eng_corrupt.generate(payload_creation, existing_file)
+            self.assertIn("로고 이미지 크기 판독 실패", str(err_ctx.exception))
+            self.assertEqual(existing_file.read_bytes(), sentinel_bytes, "손상 이미지 차단 시 기존 파일이 보존되어야 함")
+
+            # 3. 이미지 교체 후 이전 크기·배율이 남은 경우 최종 HWPX 검증 게이트에서 차단
+            distorted_hwpx = tmp / "distorted.hwpx"
+            # 템플릿의 성령강림절 크기(7007x7899, 20542x6080)를 유지한 채 창조절 이미지(336x482, 1084x373)만 BinData에 복사된 비정상 HWPX
+            extra_bindata_distorted = {
+                "BinData/image3.png": self._create_synthetic_png(336, 482),
+                "BinData/image4.png": self._create_synthetic_png(1084, 373),
+            }
+            self._write_synthetic_hwpx_fixture(
+                distorted_hwpx,
+                include_logos=True,
+                extra_bindata=extra_bindata_distorted,
+            )
+            with self.assertRaises(HwpxArtifactValidationError) as gate_ctx:
+                validate_generated_hwpx(distorted_hwpx, payload_creation)
+            distorted_checks = {i["check"] for i in gate_ctx.exception.issues}
+            self.assertTrue(
+                {"logo_size_mismatch", "logo_ratio_distortion", "logo_orgsz_mismatch"}.intersection(distorted_checks),
+                f"의도한 로고 결함이 검증 게이트에서 검출되어야 함: {distorted_checks}",
+            )
+
+            # 4. 지원하는 절기별 정상 로고 통과 검증 (창조절, 성령강림절, 사순절)
+            # 4-a. 성령강림절
+            logo_dir_pentecost = tmp / "logos_pentecost"
+            logo_dir_pentecost.mkdir()
+            (logo_dir_pentecost / "성령강림절 (1).png").write_bytes(self._create_synthetic_png(251, 283))
+            (logo_dir_pentecost / "성령강림절 (2).png").write_bytes(self._create_synthetic_png(700, 207))
+
+            payload_pentecost = {
+                "metadata": {"date_compact": "20260524", "season": "성령강림절"},
+                "worship_1": {"sermon_title": "가상설교"},
+                "announcements_sections": self._canonical_6tier([{"title": "가상모임", "content": "05/24(일) 13:00"}]),
+            }
+            out_pentecost = tmp / "out_pentecost.hwpx"
+            eng_pentecost = HwpxEngine(tpl, logo_dir=logo_dir_pentecost)
+            saved_pente = eng_pentecost.generate(payload_pentecost, out_pentecost)
+            self.assertTrue(saved_pente.is_file())
+            # 검증 게이트 통과 확인 (예외 발생 없음)
+            validate_generated_hwpx(saved_pente, payload_pentecost)
+
+            # 4-b. 사순절 (동적 계산 절기)
+            logo_dir_lent = tmp / "logos_lent"
+            logo_dir_lent.mkdir()
+            (logo_dir_lent / "사순절, 대림절 (1).png").write_bytes(self._create_synthetic_png(293, 351))
+            (logo_dir_lent / "사순절, 대림절 (2).png").write_bytes(self._create_synthetic_png(704, 197))
+
+            payload_lent = {
+                "metadata": {"date_compact": "20260301", "season": "사순절"},
+                "worship_1": {"sermon_title": "가상설교"},
+                "announcements_sections": self._canonical_6tier([{"title": "가상모임", "content": "03/01(일) 13:00"}]),
+            }
+            out_lent = tmp / "out_lent.hwpx"
+            eng_lent = HwpxEngine(tpl, logo_dir=logo_dir_lent)
+            saved_lent = eng_lent.generate(payload_lent, out_lent)
+            self.assertTrue(saved_lent.is_file())
+            validate_generated_hwpx(saved_lent, payload_lent)
 
 
 if __name__ == "__main__":
