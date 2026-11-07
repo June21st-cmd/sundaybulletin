@@ -533,6 +533,35 @@ def validate_bulletin_facts_data(
                 # 오프라인이거나 네트워크 단절 시는 검증 건너뜀 (단위테스트 fallback)
                 pass
 
+        # 7. 교독송 4글자 하이픈 오적용 검증 (Rule 18)
+        worship = data.get("worship_1", data.get("worship", {}))
+        rh = worship.get("responsive_hymn", {}) if isinstance(worship, dict) else {}
+        if rh and isinstance(rh, dict):
+            for k, v in rh.items():
+                if isinstance(v, str) and v:
+                    # 1) 4글자 이상 단어 내 하이픈 삽입 감지 (예: 하-나님은 등)
+                    for m in re.finditer(r'([가-힣]{1,3})-([가-힣]{1,3})', v):
+                        word_no_hyphen = m.group(1) + m.group(2)
+                        if len(word_no_hyphen) >= 4:
+                            issues.append({
+                                "level": "ERROR",
+                                "category": "교독송 4글자 구절 하이픈 오적용 (Rule 18)",
+                                "section": "2면 교독송",
+                                "item": k,
+                                "content": v,
+                                "message": f"교독송 '{v}' 중 '{m.group(0)}'는 이미 {len(word_no_hyphen)}글자(음절)이므로 하이픈(-)을 넣을 수 없습니다. 4박자(4음보) 체계에서 4음절은 하이픈 없이 표기해야 합니다."
+                            })
+                    # 2) 4글자 이상 단어 뒤 행 끝단 하이픈 삽입 감지 (예: 크시도다 -, 모든자들 -, 불쌍하니 -)
+                    for m in re.finditer(r'([가-힣]{4,})\s*-\s*$', v):
+                        issues.append({
+                            "level": "ERROR",
+                            "category": "교독송 4글자 구절 하이픈 오적용 (Rule 18)",
+                            "section": "2면 교독송",
+                            "item": k,
+                            "content": v,
+                            "message": f"교독송 '{v}'의 '{m.group(1)}'는 이미 {len(m.group(1))}글자이므로 뒤에 하이픈(-)을 덧붙일 수 없습니다. 원고에 없는 임의 하이픈 부가는 금지됩니다."
+                        })
+
     return issues
 
 
