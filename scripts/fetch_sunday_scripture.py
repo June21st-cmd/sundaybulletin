@@ -44,12 +44,15 @@ def fetch_post_url(target_date: str):
     return None
 
 def fetch_scripture_content(post_url: str):
+    import html as html_module
     req = urllib.request.Request(post_url, headers={'User-Agent': 'Mozilla/5.0'})
     with urllib.request.urlopen(req, timeout=10) as resp:
         html = resp.read().decode('utf-8', errors='ignore')
-        body = re.search(r'<div[^>]+class="[^"]*xe_content[^"]*"[^>]*>(.*?)</div>', html, re.DOTALL)
+        body = re.search(r'<div[^>]+class="[^"]*xe_content[^"]*"[^>]*>(.*?)(?:<!--AfterDocument|</article>|<div class="rd_ft")', html, re.DOTALL)
         if body:
             content = body.group(1)
+            content = re.sub(r'<!--\[data-hwpjson\].*?-->', '', content, flags=re.DOTALL)
+            content = html_module.unescape(content)
             content = re.sub(r'<br\s*/?>', '\n', content)
             content = re.sub(r'<p[^>]*>', '\n', content)
             content = re.sub(r'</p>', '\n', content)

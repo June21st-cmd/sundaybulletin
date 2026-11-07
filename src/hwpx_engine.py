@@ -1686,15 +1686,8 @@ class HwpxEngine:
                                         i_title = str(item).strip()
                                         i_content = ""
 
-                                    # 항목별 맞춤 자간 설정 (인간의 융통성: 한두 글자가 다음 줄로 삐져나오는 과부 현상 방지)
-                                    # 불릿 '∙ ' 기호는 항상 charPr 79(자간 0%)를 유지하여 정렬을 보존하고,
-                                    # 글자 시작 부분부터 끝 부분까지 항목별 맞춤 자간 적용
-                                    item_sp = 0
-                                    for kw, sp_val in self.ITEM_SPACING_CONFIG:
-                                        if kw in i_title:
-                                            item_sp = sp_val
-                                            break
-
+                                    # 사용자 기본 자간(spacing 0, ratio 96) 유지: 인위적 음수 자간 강제 배제
+                                    item_sp = item.get("spacing", 0) if isinstance(item, dict) else 0
                                     if item_sp in self.SPACING_CID_MAP:
                                         b_cid, r_cid = self.SPACING_CID_MAP[item_sp]
                                     else:
@@ -1784,29 +1777,44 @@ class HwpxEngine:
                                             )
                                         p_list.append(p_item)
 
-                                        # 신도회 월례회 항목 직후 신도회 장소 안내 표(박스) 자동 삽입 (단, 당일 '오늘 일정'일 때만)
+                                        # 신도회 월례회 항목 직후 신도회 장소 안내 표(박스) 자동 삽입 (사용자 수동 교정 규격 100% 보존)
                                         if i_title == "신도회 월례회" and "오늘 일정" in sec_title:
                                             fellowship_box = (
-
                                                 '<ns1:p id="2147483648" paraPrIDRef="109" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">'
                                                 '<ns1:run charPrIDRef="72"><ns1:t>  </ns1:t>'
-                                                '<ns1:tbl id="1137471996" zOrder="17" numberingType="TABLE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" pageBreak="CELL" repeatHeader="1" rowCnt="1" colCnt="1" cellSpacing="0" borderFillIDRef="4" noAdjust="0">'
-                                                '<ns1:sz width="50408" widthRelTo="ABSOLUTE" height="6852" heightRelTo="ABSOLUTE" protect="0" />'
-                                                '<ns1:pos treatAsChar="1" affectLSpacing="0" flowWithText="0" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0" />'
-                                                '<ns1:outMargin left="0" right="0" top="0" bottom="0" />'
-                                                '<ns1:inMargin left="510" right="510" top="141" bottom="141" />'
+                                                '<ns1:tbl id="1137471996" zOrder="17" numberingType="TABLE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" pageBreak="CELL" repeatHeader="1" rowCnt="1" colCnt="3" cellSpacing="0" borderFillIDRef="4" noAdjust="0">'
+                                                '<ns1:sz width="50408" widthRelTo="ABSOLUTE" height="6003" heightRelTo="ABSOLUTE" protect="0"/>'
+                                                '<ns1:pos treatAsChar="1" affectLSpacing="0" flowWithText="0" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/>'
+                                                '<ns1:outMargin left="0" right="0" top="0" bottom="0"/>'
+                                                '<ns1:inMargin left="0" right="0" top="141" bottom="141"/>'
                                                 '<ns1:tr>'
-                                                '<ns1:tc name="" header="0" hasMargin="0" protect="0" editable="0" dirty="0" borderFillIDRef="4">'
+                                                '<ns1:tc name="" header="0" hasMargin="0" protect="0" editable="0" dirty="0" borderFillIDRef="51">'
                                                 '<ns1:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">'
-                                                '<ns1:p id="2147483648" paraPrIDRef="32" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="195"><ns1:t>새청: 청소년부실(5층) ‖ 청신: 상담실(4층) ‖ 희청: 안병무도서관(3층)</ns1:t></ns1:run></ns1:p>'
-                                                '<ns1:p id="2147483648" paraPrIDRef="32" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="195"><ns1:t>청녀: 세미나실(4층) ‖ 청남: 복도 쉼터(4층) ‖ 희녀: 담임목사실(4층)</ns1:t></ns1:run></ns1:p>'
-                                                '<ns1:p id="2147483648" paraPrIDRef="32" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="195"><ns1:t>희남: 유아부(4층) ‖ 장녀: 장년여신도회방(4층) ‖ 장남: 장년남신도회방(5층)</ns1:t></ns1:run></ns1:p>'
+                                                '<ns1:p id="2147483648" paraPrIDRef="96" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="37"><ns1:t>새청: 청소년부실(5층)</ns1:t></ns1:run></ns1:p>'
+                                                '<ns1:p id="2147483648" paraPrIDRef="96" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="37"><ns1:t>청녀: 세미나실(4층)</ns1:t></ns1:run></ns1:p>'
+                                                '<ns1:p id="2147483648" paraPrIDRef="96" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="37"><ns1:t>희남: 유아부(4층)</ns1:t></ns1:run></ns1:p>'
                                                 '</ns1:subList>'
-                                                '<ns1:cellAddr colAddr="0" rowAddr="0" /><ns1:cellSpan colSpan="1" rowSpan="1" /><ns1:cellSz width="50408" height="6852" /><ns1:cellMargin left="510" right="510" top="141" bottom="141" />'
+                                                '<ns1:cellAddr colAddr="0" rowAddr="0"/><ns1:cellSpan colSpan="1" rowSpan="1"/><ns1:cellSz width="15104" height="6003"/><ns1:cellMargin left="200" right="200" top="141" bottom="141"/>'
+                                                '</ns1:tc>'
+                                                '<ns1:tc name="" header="0" hasMargin="0" protect="0" editable="0" dirty="0" borderFillIDRef="52">'
+                                                '<ns1:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">'
+                                                '<ns1:p id="2147483648" paraPrIDRef="96" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="37"><ns1:t>청신: 상담실(4층)</ns1:t></ns1:run></ns1:p>'
+                                                '<ns1:p id="2147483648" paraPrIDRef="96" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="37"><ns1:t>청남: 복도 쉼터(4층)</ns1:t></ns1:run></ns1:p>'
+                                                '<ns1:p id="2147483648" paraPrIDRef="96" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="37"><ns1:t>장녀: 장년여신도회방(4층)</ns1:t></ns1:run></ns1:p>'
+                                                '</ns1:subList>'
+                                                '<ns1:cellAddr colAddr="1" rowAddr="0"/><ns1:cellSpan colSpan="1" rowSpan="1"/><ns1:cellSz width="17651" height="6003"/><ns1:cellMargin left="200" right="200" top="141" bottom="141"/>'
+                                                '</ns1:tc>'
+                                                '<ns1:tc name="" header="0" hasMargin="0" protect="0" editable="0" dirty="0" borderFillIDRef="53">'
+                                                '<ns1:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">'
+                                                '<ns1:p id="2147483648" paraPrIDRef="96" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="37"><ns1:t>희청: 안병무도서관(3층)</ns1:t></ns1:run></ns1:p>'
+                                                '<ns1:p id="2147483648" paraPrIDRef="96" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="37"><ns1:t>희녀: 담임목사실(4층)</ns1:t></ns1:run></ns1:p>'
+                                                '<ns1:p id="2147483648" paraPrIDRef="96" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><ns1:run charPrIDRef="37"><ns1:t>장남: 장년남신도회방(5층)</ns1:t></ns1:run></ns1:p>'
+                                                '</ns1:subList>'
+                                                '<ns1:cellAddr colAddr="2" rowAddr="0"/><ns1:cellSpan colSpan="1" rowSpan="1"/><ns1:cellSz width="17653" height="6003"/><ns1:cellMargin left="200" right="200" top="141" bottom="141"/>'
                                                 '</ns1:tc>'
                                                 '</ns1:tr>'
                                                 '</ns1:tbl>'
-                                                '<ns1:t /></ns1:run>'
+                                                '<ns1:t/></ns1:run>'
                                                 '</ns1:p>'
                                             )
                                             p_list.append(fellowship_box)
@@ -1848,17 +1856,17 @@ class HwpxEngine:
                         if re.search(ann_pat, xml_text):
                             xml_text = re.sub(ann_pat, new_ann_xml + "\n", xml_text, count=1)
 
-                    # 교회 탄소중립 최신 수치 갱신 (9월 데이터 - 10/4 주보 SSOT)
+                    # 교회 탄소중립 최신 수치 갱신 (10월 데이터 - 11/1 주보 SSOT)
                     xml_text = re.sub(
                         r'\[교회탄소중립\]\s*[^<]+',
-                        '[교회탄소중립] 9월전기 사용량 4.91MWh(전년4.94MWh) / 생산량 1.70MWh(전년1.30MWh)',
+                        '[교회탄소중립] 10월전기 사용량 3.96MWh(전년4.19MWh) / 생산량 0.86MWh(전년0.98MWh)',
                         xml_text
                     )
-                    xml_text = xml_text.replace("7월전기 ", "9월전기 ").replace("8월전기 ", "9월전기 ")
-                    xml_text = xml_text.replace("5.86MWh", "4.91MWh").replace("6.89MWh", "4.91MWh")
-                    xml_text = xml_text.replace("전년5.91MWh", "전년4.94MWh").replace("전년6.90MWh", "전년4.94MWh")
-                    xml_text = xml_text.replace("1.08MWh", "1.70MWh").replace("1.31MWh", "1.70MWh")
-                    xml_text = xml_text.replace("전년1.26MWh", "전년1.30MWh").replace("전년1.29MWh", "전년1.30MWh")
+                    xml_text = xml_text.replace("7월전기 ", "10월전기 ").replace("8월전기 ", "10월전기 ").replace("9월전기 ", "10월전기 ")
+                    xml_text = xml_text.replace("5.86MWh", "3.96MWh").replace("6.89MWh", "3.96MWh").replace("4.91MWh", "3.96MWh")
+                    xml_text = xml_text.replace("전년5.91MWh", "전년4.19MWh").replace("전년6.90MWh", "전년4.19MWh").replace("전년4.94MWh", "전년4.19MWh")
+                    xml_text = xml_text.replace("1.08MWh", "0.86MWh").replace("1.31MWh", "0.86MWh").replace("1.70MWh", "0.86MWh")
+                    xml_text = xml_text.replace("전년1.26MWh", "전년0.98MWh").replace("전년1.29MWh", "전년0.98MWh").replace("전년1.30MWh", "전년0.98MWh")
 
                     # 5. Table 10 (등록 새교우 및 기도나눔) 골든 레퍼런스 완벽 복원 (규칙 27: 140% 압축 8페이지 엄수)
                     new_members = data.get("new_members", [])
@@ -1966,123 +1974,174 @@ class HwpxEngine:
                     matched_cfg = s_cfg
                     break
 
-            if matched_cfg:
-                target_color = matched_cfg["color"]
-                
-                # 3-1. Replace color & optimize text styles in header.xml
-                header_file = contents_dir / "header.xml"
-                if header_file.is_file():
-                    h_text = header_file.read_text(encoding="utf-8")
+            # 3-1. Optimize text styles, register required charPr/paraPr/borderFill in header.xml
+            header_file = contents_dir / "header.xml"
+            if header_file.is_file():
+                h_text = header_file.read_text(encoding="utf-8")
+                if matched_cfg:
+                    target_color = matched_cfg["color"]
                     # Replace red template color #FF0000 with target season color
                     h_text = re.sub(r'textColor="#FF0000"', f'textColor="{target_color}"', h_text, flags=re.IGNORECASE)
 
-                    # 하늘뜻펴기 제목이 1줄로 알맞게 차도록 17pt 유지 및 장평 90%, 자간 0% 최적화 (사용자 지정 서식 영구 반영)
-                    # (우측 칸 병합 후 너비 39958에 맞춰 자연스럽고 시원하게 1줄 배치)
-                    h_text = re.sub(
-                        r'(<hh:charPr id="10[23]" height=")\d+("[^>]*>\s*<hh:fontRef[^>]*/>\s*<hh:ratio )[^>]+(/>\s*<hh:spacing )[^>]+(/>)',
-                        r'\g<1>1700\g<2>hangul="90" latin="90" hanja="90" japanese="90" other="90" symbol="90" user="90"\g<3>hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"\g<4>',
-                        h_text
+                # 하늘뜻펴기 제목이 1줄로 알맞게 차도록 17pt 유지 및 장평 90%, 자간 0% 최적화 (사용자 지정 서식 영구 반영)
+                # (우측 칸 병합 후 너비 39958에 맞춰 자연스럽고 시원하게 1줄 배치)
+                h_text = re.sub(
+                    r'(<hh:charPr id="10[23]" height=")\d+("[^>]*>\s*<hh:fontRef[^>]*/>\s*<hh:ratio )[^>]+(/>\s*<hh:spacing )[^>]+(/>)',
+                    r'\g<1>1700\g<2>hangul="90" latin="90" hanja="90" japanese="90" other="90" symbol="90" user="90"\g<3>hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"\g<4>',
+                    h_text
+                )
+
+                # 함께 읽는 말씀 본문이 1줄씩 알맞게 수용되도록 charPr id="173" 장평/자간 최적화
+                # (ratio 77 -> 75, spacing -10 -> -14)
+                h_text = re.sub(
+                    r'(<hh:charPr id="173"[^>]*>\s*<hh:fontRef[^>]*/>\s*<hh:ratio )[^>]+(/>\s*<hh:spacing )[^>]+(/>)',
+                    r'\g<1>hangul="75" latin="75" hanja="75" japanese="75" other="75" symbol="75" user="75"\g<2>hangul="-14" latin="-14" hanja="-14" japanese="-14" other="-14" symbol="-14" user="-14"\g<3>',
+                    h_text
+                )
+
+                # 감사헌금 명단 자간 최적화 (지난주 주보 골든 레퍼런스와 동일하게 ratio 96, spacing -8)
+                h_text = re.sub(
+                    r'(<hh:charPr id="193"[^>]*>\s*<hh:fontRef[^>]*/>\s*<hh:ratio )[^>]+(/>\s*<hh:spacing )[^>]+(/>)',
+                    r'\g<1>hangul="96" latin="96" hanja="96" japanese="96" other="96" symbol="96" user="96"\g<2>hangul="-8" latin="-8" hanja="-8" japanese="-8" other="-8" symbol="-8" user="-8"\g<3>',
+                    h_text
+                )
+
+                # 신도회 월례회 표 전용 테두리 borderFill 51, 52, 53 보장 (사용자 수동 교정 규격 100% 보존)
+                if not re.search(r'<(?:[\w]+:)?borderFill\b[^>]*\bid="51"', h_text) and '</hh:borderFills>' in h_text:
+                    bf_51_53 = (
+                        '<hh:borderFill id="51" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0"><hh:slash type="NONE" Crooked="0" isCounter="0"/><hh:backSlash type="NONE" Crooked="0" isCounter="0"/><hh:leftBorder type="SOLID" width="0.12 mm" color="#000000"/><hh:rightBorder type="NONE" width="0.12 mm" color="#000000"/><hh:topBorder type="SOLID" width="0.12 mm" color="#000000"/><hh:bottomBorder type="SOLID" width="0.12 mm" color="#000000"/><hh:diagonal type="SOLID" width="0.1 mm" color="#000000"/></hh:borderFill>'
+                        '<hh:borderFill id="52" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0"><hh:slash type="NONE" Crooked="0" isCounter="0"/><hh:backSlash type="NONE" Crooked="0" isCounter="0"/><hh:leftBorder type="NONE" width="0.12 mm" color="#000000"/><hh:rightBorder type="NONE" width="0.12 mm" color="#000000"/><hh:topBorder type="SOLID" width="0.12 mm" color="#000000"/><hh:bottomBorder type="SOLID" width="0.12 mm" color="#000000"/><hh:diagonal type="SOLID" width="0.1 mm" color="#000000"/></hh:borderFill>'
+                        '<hh:borderFill id="53" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0"><hh:slash type="NONE" Crooked="0" isCounter="0"/><hh:backSlash type="NONE" Crooked="0" isCounter="0"/><hh:leftBorder type="NONE" width="0.12 mm" color="#000000"/><hh:rightBorder type="SOLID" width="0.12 mm" color="#000000"/><hh:topBorder type="SOLID" width="0.12 mm" color="#000000"/><hh:bottomBorder type="SOLID" width="0.12 mm" color="#000000"/><hh:diagonal type="SOLID" width="0.1 mm" color="#000000"/></hh:borderFill>'
                     )
+                    h_text = re.sub(r'(</(?:hh:)?borderFills>)', bf_51_53 + r'\1', h_text)
 
-                    # 함께 읽는 말씀 본문이 1줄씩 알맞게 수용되도록 charPr id="173" 장평/자간 최적화
-                    # (ratio 77 -> 75, spacing -10 -> -14)
-                    h_text = re.sub(
-                        r'(<hh:charPr id="173"[^>]*>\s*<hh:fontRef[^>]*/>\s*<hh:ratio )[^>]+(/>\s*<hh:spacing )[^>]+(/>)',
-                        r'\g<1>hangul="75" latin="75" hanja="75" japanese="75" other="75" symbol="75" user="75"\g<2>hangul="-14" latin="-14" hanja="-14" japanese="-14" other="-14" symbol="-14" user="-14"\g<3>',
-                        h_text
+                # charPr 37 (신도회 표 텍스트): 표준 ratio 96, spacing 0 보장
+                if not re.search(r'<(?:[\w]+:)?charPr\b[^>]*\bid="37"', h_text):
+                    charpr_37_xml = (
+                        '<hh:charPr id="37" height="1500" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="9">'
+                        '<hh:fontRef hangul="3" latin="3" hanja="3" japanese="3" other="3" symbol="3" user="3"/>'
+                        '<hh:ratio hangul="96" latin="96" hanja="96" japanese="96" other="96" symbol="96" user="96"/>'
+                        '<hh:spacing hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>'
+                        '<hh:relSz hangul="100" latin="100" hanja="100" japanese="100" other="100" symbol="100" user="100"/>'
+                        '<hh:offset hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>'
+                        '<hh:underline type="NONE" shape="SOLID" color="#000000"/>'
+                        '<hh:strikeout shape="NONE" color="#000000"/>'
+                        '<hh:outline type="NONE"/>'
+                        '<hh:shadow type="NONE" color="#C0C0C0" offsetX="10" offsetY="10"/>'
+                        '</hh:charPr>'
                     )
+                    h_text = re.sub(r'(</(?:hh:)?charProperties>)', charpr_37_xml + r'\1', h_text)
 
-                    # 감사헌금 명단 자간 최적화 (지난주 주보 골든 레퍼런스와 동일하게 ratio 96, spacing -8)
-                    h_text = re.sub(
-                        r'(<hh:charPr id="193"[^>]*>\s*<hh:fontRef[^>]*/>\s*<hh:ratio )[^>]+(/>\s*<hh:spacing )[^>]+(/>)',
-                        r'\g<1>hangul="96" latin="96" hanja="96" japanese="96" other="96" symbol="96" user="96"\g<2>hangul="-8" latin="-8" hanja="-8" japanese="-8" other="-8" symbol="-8" user="-8"\g<3>',
-                        h_text
-                    )
+                # paraPr 96 (신도회 표 문단): left margin 695, lineSpacing 130 보장
+                parapr_96_xml = (
+                    '<hh:paraPr id="96" tabPrIDRef="0" condense="0" fontLineHeight="0" snapToGrid="1" suppressLineNumbers="0" checked="0">'
+                    '<hh:align horizontal="LEFT" vertical="BASELINE"/>'
+                    '<hh:heading type="NONE" idRef="0" level="0"/>'
+                    '<hh:breakSetting breakLatinWord="KEEP_WORD" breakNonLatinWord="BREAK_WORD" widowOrphan="0" keepWithNext="0" keepLines="0" pageBreakBefore="0" lineWrap="BREAK"/>'
+                    '<hh:autoSpacing eAsianEng="0" eAsianNum="0"/>'
+                    '<hp:switch><hp:case hp:required-namespace="http://www.hancom.co.kr/hwpml/2016/HwpUnitChar">'
+                    '<hh:margin><hc:intent value="0" unit="HWPUNIT"/><hc:left value="695" unit="HWPUNIT"/><hc:right value="0" unit="HWPUNIT"/><hc:prev value="0" unit="HWPUNIT"/><hc:next value="0" unit="HWPUNIT"/></hh:margin>'
+                    '<hh:lineSpacing type="PERCENT" value="130" unit="HWPUNIT"/>'
+                    '</hp:case><hp:default>'
+                    '<hh:margin><hc:intent value="0" unit="HWPUNIT"/><hc:left value="1390" unit="HWPUNIT"/><hc:right value="0" unit="HWPUNIT"/><hc:prev value="0" unit="HWPUNIT"/><hc:next value="0" unit="HWPUNIT"/></hh:margin>'
+                    '<hh:lineSpacing type="PERCENT" value="130" unit="HWPUNIT"/>'
+                    '</hp:default></hp:switch>'
+                    '<hh:border borderFillIDRef="10" offsetLeft="0" offsetRight="0" offsetTop="0" offsetBottom="0" connect="0" ignoreMargin="0"/>'
+                    '</hh:paraPr>'
+                )
+                if re.search(r'<(?:[\w]+:)?paraPr\b[^>]*\bid="96"[\s\S]*?</(?:[\w]+:)?paraPr>', h_text):
+                    h_text = re.sub(r'<(?:[\w]+:)?paraPr\b[^>]*\bid="96"[\s\S]*?</(?:[\w]+:)?paraPr>', parapr_96_xml, h_text)
+                elif '</hh:paraProperties>' in h_text:
+                    h_text = re.sub(r'(</(?:hh:)?paraProperties>)', parapr_96_xml + r'\1', h_text)
 
-                    # 신도회 월례회 박스 내부 폰트 자간 최적화 (비정상 spacing -13 -> 골든 레퍼런스 기준 spacing 0, ratio 96)
-                    h_text = re.sub(
-                        r'(<hh:charPr id="195"[^>]*>\s*<hh:fontRef[^>]*/>\s*<hh:ratio )[^>]+(/>\s*<hh:spacing )[^>]+(/>)',
-                        r'\g<1>hangul="96" latin="96" hanja="96" japanese="96" other="96" symbol="96" user="96"\g<2>hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"\g<3>',
-                        h_text
-                    )
+                # 신도회 월례회 박스 내부 폰트 자간 최적화 (골든 레퍼런스 기준 spacing 0, ratio 96)
+                h_text = re.sub(
+                    r'(<hh:charPr id="37"[^>]*>\s*<hh:fontRef[^>]*/>\s*<hh:ratio )[^>]+(/>\s*<hh:spacing )[^>]+(/>)',
+                    r'\g<1>hangul="96" latin="96" hanja="96" japanese="96" other="96" symbol="96" user="96"\g<2>hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"\g<3>',
+                    h_text
+                )
+                h_text = re.sub(
+                    r'(<hh:charPr id="195"[^>]*>\s*<hh:fontRef[^>]*/>\s*<hh:ratio )[^>]+(/>\s*<hh:spacing )[^>]+(/>)',
+                    r'\g<1>hangul="96" latin="96" hanja="96" japanese="96" other="96" symbol="96" user="96"\g<2>hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"\g<3>',
+                    h_text
+                )
 
-                    # 공동관심사 소식 제목(charPr 127) 및 본문(charPr 38): 골든 레퍼런스 표준 ratio 96, spacing 0 통일
-                    h_text = re.sub(
-                        r'(<hh:charPr id="127"[^>]*>\s*<hh:fontRef[^>]*/>\s*<hh:ratio )[^>]+(/>\s*<hh:spacing )[^>]+(/>)',
-                        r'\g<1>hangul="96" latin="96" hanja="96" japanese="96" other="96" symbol="96" user="96"\g<2>hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"\g<3>',
-                        h_text
-                    )
-                    h_text = re.sub(
-                        r'(<hh:charPr id="38"[^>]*>\s*<hh:fontRef[^>]*/>\s*<hh:ratio )[^>]+(/>\s*<hh:spacing )[^>]+(/>)',
-                        r'\g<1>hangul="96" latin="96" hanja="96" japanese="96" other="96" symbol="96" user="96"\g<2>hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"\g<3>',
-                        h_text
-                    )
+                # 공동관심사 소식 제목(charPr 127) 및 본문(charPr 38): 골든 레퍼런스 표준 ratio 96, spacing 0 통일
+                h_text = re.sub(
+                    r'(<hh:charPr id="127"[^>]*>\s*<hh:fontRef[^>]*/>\s*<hh:ratio )[^>]+(/>\s*<hh:spacing )[^>]+(/>)',
+                    r'\g<1>hangul="96" latin="96" hanja="96" japanese="96" other="96" symbol="96" user="96"\g<2>hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"\g<3>',
+                    h_text
+                )
+                h_text = re.sub(
+                    r'(<hh:charPr id="38"[^>]*>\s*<hh:fontRef[^>]*/>\s*<hh:ratio )[^>]+(/>\s*<hh:spacing )[^>]+(/>)',
+                    r'\g<1>hangul="96" latin="96" hanja="96" japanese="96" other="96" symbol="96" user="96"\g<2>hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"\g<3>',
+                    h_text
+                )
 
-                    # 공동관심사 소주제 줄간격 130% 고정 및 내용 문단 줄간격 조절 (기본 170%, 분량에 따라 유동 조절 가능)
-                    ann_line_spacing = str(data.get("announcement_line_spacing", 170))
-                    def update_para_102_line_spacing(match):
-                        xml_chunk = match.group(0)
-                        return re.sub(r'lineSpacing type="PERCENT" value="\d+"', f'lineSpacing type="PERCENT" value="{ann_line_spacing}"', xml_chunk)
+                # 공동관심사 소주제 줄간격 130% 고정 및 내용 문단 줄간격 조절 (기본 140%, 분량에 따라 유동 조절 가능)
+                ann_line_spacing = str(data.get("announcement_line_spacing", 140))
+                def update_para_102_line_spacing(match):
+                    xml_chunk = match.group(0)
+                    return re.sub(r'lineSpacing type="PERCENT" value="\d+"', f'lineSpacing type="PERCENT" value="{ann_line_spacing}"', xml_chunk)
 
-                    h_text = re.sub(r'<hh:paraPr id="102"[\s\S]*?</hh:paraPr>', update_para_102_line_spacing, h_text)
+                h_text = re.sub(r'<hh:paraPr id="102"[\s\S]*?</hh:paraPr>', update_para_102_line_spacing, h_text)
 
-                    # 미적 조판용 미세 자간 charPr 등록 (-1% ~ -11%) - 이미 정의된 ID는 중복 추가 금지
-                    existing_cids = set(re.findall(r'<(?:[\w]+:)?charPr\b[^>]*\bid="(\d+)"', h_text))
-                    new_charpr_xml = []
-                    for sp, (b_id, r_id) in self.SPACING_CID_MAP.items():
-                        ratio_val = "95" if sp <= -4 else "96"
-                        if b_id not in existing_cids:
-                            new_charpr_xml.append(
-                                f'<hh:charPr id="{b_id}" height="1500" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="9">'
-                                f'<hh:fontRef hangul="3" latin="3" hanja="3" japanese="3" other="3" symbol="3" user="3"/>'
-                                f'<hh:ratio hangul="{ratio_val}" latin="{ratio_val}" hanja="{ratio_val}" japanese="{ratio_val}" other="{ratio_val}" symbol="{ratio_val}" user="{ratio_val}"/>'
-                                f'<hh:spacing hangul="{sp}" latin="{sp}" hanja="{sp}" japanese="{sp}" other="{sp}" symbol="{sp}" user="{sp}"/>'
-                                f'<hh:relSz hangul="100" latin="100" hanja="100" japanese="100" other="100" symbol="100" user="100"/>'
-                                f'<hh:offset hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>'
-                                f'<hh:bold/>'
-                                f'<hh:underline type="NONE" shape="SOLID" color="#000000"/>'
-                                f'<hh:strikeout shape="NONE" color="#000000"/>'
-                                f'<hh:outline type="NONE"/>'
-                                f'<hh:shadow type="NONE" color="#C0C0C0" offsetX="10" offsetY="10"/>'
-                                f'</hh:charPr>'
-                            )
-                        if r_id not in existing_cids:
-                            new_charpr_xml.append(
-                                f'<hh:charPr id="{r_id}" height="1500" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="9">'
-                                f'<hh:fontRef hangul="3" latin="3" hanja="3" japanese="3" other="3" symbol="3" user="3"/>'
-                                f'<hh:ratio hangul="{ratio_val}" latin="{ratio_val}" hanja="{ratio_val}" japanese="{ratio_val}" other="{ratio_val}" symbol="{ratio_val}" user="{ratio_val}"/>'
-                                f'<hh:spacing hangul="{sp}" latin="{sp}" hanja="{sp}" japanese="{sp}" other="{sp}" symbol="{sp}" user="{sp}"/>'
-                                f'<hh:relSz hangul="100" latin="100" hanja="100" japanese="100" other="100" symbol="100" user="100"/>'
-                                f'<hh:offset hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>'
-                                f'<hh:underline type="NONE" shape="SOLID" color="#000000"/>'
-                                f'<hh:strikeout shape="NONE" color="#000000"/>'
-                                f'<hh:outline type="NONE"/>'
-                                f'<hh:shadow type="NONE" color="#C0C0C0" offsetX="10" offsetY="10"/>'
-                                f'</hh:charPr>'
-                            )
-                    if new_charpr_xml:
-                        added_xml = "".join(new_charpr_xml)
-                        m_cnt = re.search(r'(<hh:charProperties itemCnt=")(\d+)(">)', h_text)
-                        if m_cnt:
-                            old_cnt = int(m_cnt.group(2))
-                            new_cnt = old_cnt + len(new_charpr_xml)
-                            h_text = h_text[:m_cnt.start()] + f'{m_cnt.group(1)}{new_cnt}{m_cnt.group(3)}' + h_text[m_cnt.end():]
-                        h_text = h_text.replace('</hh:charProperties>', f'{added_xml}</hh:charProperties>')
+                # 미적 조판용 미세 자간 charPr 등록 (-1% ~ -11%) - 이미 정의된 ID는 중복 추가 금지
+                existing_cids = set(re.findall(r'<(?:[\w]+:)?charPr\b[^>]*\bid="(\d+)"', h_text))
+                new_charpr_xml = []
+                for sp, (b_id, r_id) in self.SPACING_CID_MAP.items():
+                    ratio_val = "95" if sp <= -4 else "96"
+                    if b_id not in existing_cids:
+                        new_charpr_xml.append(
+                            f'<hh:charPr id="{b_id}" height="1500" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="9">'
+                            f'<hh:fontRef hangul="3" latin="3" hanja="3" japanese="3" other="3" symbol="3" user="3"/>'
+                            f'<hh:ratio hangul="{ratio_val}" latin="{ratio_val}" hanja="{ratio_val}" japanese="{ratio_val}" other="{ratio_val}" symbol="{ratio_val}" user="{ratio_val}"/>'
+                            f'<hh:spacing hangul="{sp}" latin="{sp}" hanja="{sp}" japanese="{sp}" other="{sp}" symbol="{sp}" user="{sp}"/>'
+                            f'<hh:relSz hangul="100" latin="100" hanja="100" japanese="100" other="100" symbol="100" user="100"/>'
+                            f'<hh:offset hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>'
+                            f'<hh:bold/>'
+                            f'<hh:underline type="NONE" shape="SOLID" color="#000000"/>'
+                            f'<hh:strikeout shape="NONE" color="#000000"/>'
+                            f'</hh:charPr>'
+                        )
+                    if r_id not in existing_cids:
+                        new_charpr_xml.append(
+                            f'<hh:charPr id="{r_id}" height="1500" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="9">'
+                            f'<hh:fontRef hangul="3" latin="3" hanja="3" japanese="3" other="3" symbol="3" user="3"/>'
+                            f'<hh:ratio hangul="{ratio_val}" latin="{ratio_val}" hanja="{ratio_val}" japanese="{ratio_val}" other="{ratio_val}" symbol="{ratio_val}" user="{ratio_val}"/>'
+                            f'<hh:spacing hangul="{sp}" latin="{sp}" hanja="{sp}" japanese="{sp}" other="{sp}" symbol="{sp}" user="{sp}"/>'
+                            f'<hh:relSz hangul="100" latin="100" hanja="100" japanese="100" other="100" symbol="100" user="100"/>'
+                            f'<hh:offset hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>'
+                            f'<hh:underline type="NONE" shape="SOLID" color="#000000"/>'
+                            f'<hh:strikeout shape="NONE" color="#000000"/>'
+                            f'</hh:charPr>'
+                        )
+                if new_charpr_xml:
+                    added_xml = "".join(new_charpr_xml)
+                    m_cnt = re.search(r'(<hh:charProperties itemCnt=")(\d+)(">)', h_text)
+                    if m_cnt:
+                        old_cnt = int(m_cnt.group(2))
+                        new_cnt = old_cnt + len(new_charpr_xml)
+                        h_text = h_text[:m_cnt.start()] + f'{m_cnt.group(1)}{new_cnt}{m_cnt.group(3)}' + h_text[m_cnt.end():]
+                    h_text = h_text.replace('</hh:charProperties>', f'{added_xml}</hh:charProperties>')
 
-                    # 8페이지 목회마당 포스터 제거 및 배경 초기화 (텍스트 대체 시)
-                    pastoral_text = str(data.get("pastoral_corner", {}).get("text", "") or data.get("pastoral_text", "")).strip()
-                    if pastoral_text:
-                        def remove_poster_fill(match):
-                            bf_chunk = match.group(0)
-                            return re.sub(
-                                r'<hc:fillBrush>.*?</hc:fillBrush>',
-                                '<hc:fillBrush><hc:winBrush faceColor="#FFFFFF" hatchColor="none" alpha="0"/></hc:fillBrush>',
-                                bf_chunk,
-                                flags=re.DOTALL
-                            )
-                        h_text = re.sub(r'<hh:borderFill id="50"[\s\S]*?</hh:borderFill>', remove_poster_fill, h_text)
+                # 8페이지 목회마당 포스터 제거 및 배경 초기화 (텍스트 대체 시)
+                pastoral_text = str(data.get("pastoral_corner", {}).get("text", "") or data.get("pastoral_text", "")).strip()
+                if pastoral_text:
+                    def remove_poster_fill(match):
+                        bf_chunk = match.group(0)
+                        return re.sub(
+                            r'<hc:fillBrush>.*?</hc:fillBrush>',
+                            '<hc:fillBrush><hc:winBrush faceColor="#FFFFFF" hatchColor="none" alpha="0"/></hc:fillBrush>',
+                            bf_chunk,
+                            flags=re.DOTALL
+                        )
+                    h_text = re.sub(r'<hh:borderFill id="50"[\s\S]*?</hh:borderFill>', remove_poster_fill, h_text)
 
-                    header_file.write_text(h_text, encoding="utf-8")
+                header_file.write_text(h_text, encoding="utf-8")
+
+            if matched_cfg:
+                target_color = matched_cfg["color"]
 
                 # 3-2. Replace logos in BinData and preserve exact aspect ratio & rendering matrix
                 bindata_dir = temp_path / "BinData"
